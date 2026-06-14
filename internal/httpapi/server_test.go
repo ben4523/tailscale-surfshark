@@ -49,9 +49,14 @@ func newTestServer(t *testing.T) (*httptest.Server, *fakeOps, *state.State) {
 	st := state.Default()
 	bus := eventbus.New(4)
 	ops := &fakeOps{available: []string{"us-nyc", "fr-par"}}
+	// httptest.NewServer routes requests over loopback, so the auth
+	// middleware treats every test request as "proxied via tailscale serve"
+	// and short-circuits whois. Use the "*" allow-list so the tests focus
+	// on handler behavior, not on identity wiring (the auth path itself is
+	// covered by the auth package's unit tests).
 	srv := httpapi.NewServer(httpapi.Deps{
 		Whois:   allowAllWhois{},
-		Allowed: []string{"ben@example.com"},
+		Allowed: []string{"*"},
 		State:   st,
 		Bus:     bus,
 		Ops:     ops,
