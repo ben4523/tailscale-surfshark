@@ -77,6 +77,7 @@ func (o *Ops) Toggle(ctx context.Context, on bool) error {
 }
 
 func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
+	o.logger.Info("switch start", "location", loc)
 	// Tear down any prior routes/interface from the previous location.
 	o.wg.RemoveDefaultRoutes(ctx, o.st.Surfshark.CurrentEndpointIP, "eth0")
 	_ = o.wg.Down(ctx, "wg0")
@@ -85,13 +86,15 @@ func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
 	if err != nil {
 		return err
 	}
+	o.logger.Info("switch resolved endpoint", "location", loc, "endpoint_ip", endpointIP)
 	if err := o.wg.Up(ctx, wg0OutPath); err != nil {
-		return err
+		return fmt.Errorf("wg-quick up: %w", err)
 	}
 	if err := o.wg.InstallDefaultRoutes(ctx, endpointIP, "eth0"); err != nil {
 		_ = o.wg.Down(ctx, "wg0")
 		return fmt.Errorf("install routes: %w", err)
 	}
+	o.logger.Info("switch routes installed", "location", loc, "endpoint_ip", endpointIP)
 
 	o.st.Surfshark.CurrentLocation = loc
 	o.st.Surfshark.CurrentEndpointIP = endpointIP

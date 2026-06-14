@@ -30,8 +30,20 @@ func New() *Controller                   { return &Controller{r: execRunner{}} }
 func NewWithRunner(r Runner) *Controller { return &Controller{r: r} }
 
 func (c *Controller) Up(ctx context.Context, confPath string) error {
-	_, err := c.r.Run(ctx, "wg-quick", "up", confPath)
-	return err
+	if _, err := c.r.Run(ctx, "wg-quick", "up", confPath); err != nil {
+		return err
+	}
+	// wireguard-go (userspace) sometimes returns from its parent process a
+	// hair before the kernel TUN device is queryable. Spin briefly (up to ~2s)
+	// until `ip link show wg0` succeeds — then any follow-up `ip route add ...
+	// dev wg0` will not race.
+	for i := 0; i < 20; i++ {
+		if _, err := c.r.Run(ctx, "ip", "link", "show", "wg0"); err == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("wg-quick up returned ok but wg0 never appeared (within 2s)")
 }
 
 func (c *Controller) Down(ctx context.Context, ifaceOrPath string) error {
