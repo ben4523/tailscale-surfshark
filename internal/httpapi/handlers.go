@@ -74,6 +74,3 @@ func (s *Server) handlePreferred(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string][]string{"locations": body.Locations})
 }
 
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
