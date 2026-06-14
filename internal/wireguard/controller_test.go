@@ -33,8 +33,19 @@ func TestUp_CallsWGQuick(t *testing.T) {
 	if err := c.Up(context.Background(), "/etc/wireguard/wg0.conf"); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.calls) != 1 || r.calls[0] != "wg-quick up /etc/wireguard/wg0.conf" {
-		t.Errorf("calls = %v", r.calls)
+	if len(r.calls) < 1 || r.calls[0] != "wg-quick up /etc/wireguard/wg0.conf" {
+		t.Errorf("first call = %v, want wg-quick up...", r.calls)
+	}
+	// Up also polls 'ip link show wg0' until the interface is queryable.
+	foundLinkShow := false
+	for _, c := range r.calls {
+		if c == "ip link show wg0" {
+			foundLinkShow = true
+			break
+		}
+	}
+	if !foundLinkShow {
+		t.Errorf("expected an 'ip link show wg0' poll, calls = %v", r.calls)
 	}
 }
 
