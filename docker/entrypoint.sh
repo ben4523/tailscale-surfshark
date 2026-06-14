@@ -17,14 +17,21 @@ if [[ "$(cat /proc/sys/net/ipv4/ip_forward)" != "1" ]]; then
   sysctl -w net.ipv4.ip_forward=1 || { err "failed to enable ip_forward"; exit 3; }
 fi
 
+# Tell wg-quick to use userspace WireGuard. DSM kernels miss the wireguard.ko
+# module; wireguard-go provides a userspace TUN-based implementation that the
+# wg-quick script falls back to when the kernel can't create the interface.
+export WG_QUICK_USERSPACE_IMPLEMENTATION=wireguard-go
+
 # Start tailscaled in background, state in /data/tailscale.
-# TS_DEBUG_FIREWALL_MODE forces nftables (DSM kernel rejects iptables-nft
-# legacy extensions like xt_MASQUERADE — see project README §Troubleshooting).
+# --tun=userspace-networking runs Tailscale entirely in user-space netstack,
+# bypassing the DSM kernel's missing netfilter modules. Exit-node routing
+# still works: outbound connections from netstack use the container's normal
+# routing table (which wg-quick will point at wg0).
 TS_DEBUG_FIREWALL_MODE=nftables \
 tailscaled \
   --state=/data/tailscale/tailscaled.state \
   --socket=/var/run/tailscale/tailscaled.sock \
-  --tun=tailscale0 \
+  --tun=userspace-networking \
   &
 TSD_PID=$!
 
