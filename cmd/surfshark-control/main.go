@@ -209,6 +209,7 @@ func main() {
 		State:   st,
 		Bus:     bus,
 		Ops:     ops,
+		Logger:  logger,
 	})
 	srv.MountStatic(web.FS)
 

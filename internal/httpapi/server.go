@@ -24,6 +24,7 @@ type Deps struct {
 	State   *state.State
 	Bus     *eventbus.Bus
 	Ops     Ops
+	Logger  auth.Logger // optional; used to log auth failures
 }
 
 type Server struct {
@@ -33,9 +34,13 @@ type Server struct {
 }
 
 func NewServer(d Deps) *Server {
+	mw := auth.New(d.Whois, d.Allowed)
+	if d.Logger != nil {
+		mw.SetLogger(d.Logger)
+	}
 	s := &Server{
 		d:   d,
-		mw:  auth.New(d.Whois, d.Allowed),
+		mw:  mw,
 		mux: http.NewServeMux(),
 	}
 	s.routes()
