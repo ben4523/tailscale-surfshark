@@ -57,6 +57,45 @@ func TestMiddleware_RejectsNonWhitelisted(t *testing.T) {
 	}
 }
 
+func TestMiddleware_Wildcard_AllowsAnyResolvedIdentity(t *testing.T) {
+	mw := auth.New(fakeWhois(func(ctx context.Context, ip string) (string, error) {
+		return "tagged-devices", nil
+	}), []string{"*"})
+
+	called := false
+	h := mw.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if got := auth.UserFromContext(r.Context()); got != "tagged-devices" {
+			t.Errorf("user in ctx = %q", got)
+		}
+		w.WriteHeader(204)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "100.64.0.5:1234"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !called {
+		t.Fatal("wildcard must allow any resolved identity")
+	}
+}
+
+func TestMiddleware_Wildcard_StillRejectsWhoisError(t *testing.T) {
+	mw := auth.New(fakeWhois(func(ctx context.Context, ip string) (string, error) {
+		return "", errors.New("not in tailnet")
+	}), []string{"*"})
+
+	h := mw.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("wildcard must NOT allow non-tailnet callers")
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "1.2.3.4:1234"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rec.Code)
+	}
+}
+
 func TestMiddleware_RejectsWhoisError(t *testing.T) {
 	mw := auth.New(fakeWhois(func(ctx context.Context, ip string) (string, error) {
 		return "", errors.New("not in tailnet")
