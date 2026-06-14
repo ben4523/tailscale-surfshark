@@ -54,5 +54,15 @@ tailscale up \
   --accept-dns=false \
   --hostname="${TS_HOSTNAME}"
 
+# Expose the local HTTP UI to the tailnet. In userspace-networking mode the
+# Tailscale IP is not on a kernel interface, so the Go server binds 127.0.0.1
+# and Tailscale serve forwards incoming tailnet traffic to it. Headers
+# (Tailscale-User-Login etc.) are injected so the auth middleware can
+# identify the caller without calling whois.
+# Idempotent reset; we don't care if reset fails on first boot.
+tailscale serve reset 2>/dev/null || true
+tailscale serve --bg --http=8080 http://127.0.0.1:8080 || \
+  err "tailscale serve failed (UI may be unreachable from tailnet — check tailnet HTTPS prefs)"
+
 # Hand off to the Go daemon as PID 1.
 exec /app/surfshark-control

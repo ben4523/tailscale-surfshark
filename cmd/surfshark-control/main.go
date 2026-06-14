@@ -195,13 +195,11 @@ func main() {
 		st.KillSwitch.CurrentlyArmed = true
 	}
 
-	// Bind on the container's tailscale IP if available, else 0.0.0.0
-	ip, err := tsCli.IPv4(context.Background())
-	if err != nil || ip == "" {
-		logger.Warn("tailscale ip unavailable, binding 0.0.0.0", "error", fmt.Sprintf("%v", err))
-		ip = "0.0.0.0"
-	}
-	addr := fmt.Sprintf("%s:%d", ip, httpPort)
+	// Bind on loopback only. Public exposure to the tailnet is handled by
+	// `tailscale serve --http=8080 http://127.0.0.1:8080` set up in the
+	// entrypoint — which works in userspace-networking mode (where the
+	// Tailscale IP is NOT on any kernel interface and cannot be bound to).
+	addr := fmt.Sprintf("127.0.0.1:%d", httpPort)
 
 	srv := httpapi.NewServer(httpapi.Deps{
 		Whois:   tsCli,

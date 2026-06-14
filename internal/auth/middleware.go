@@ -59,13 +59,25 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 		if err != nil {
 			ip = r.RemoteAddr
 		}
-		user, err := m.whois.Whois(r.Context(), ip)
-		if err != nil {
-			if m.logger != nil {
-				m.logger.Warn("auth: whois failed", "ip", ip, "error", err.Error())
+
+		// Preferred: identity injected by `tailscale serve` (works in userspace-
+		// networking mode where the Tailscale IP isn't on a kernel interface, so
+		// our HTTP server binds 127.0.0.1 and Tailscale proxies in).
+		user := strings.TrimSpace(r.Header.Get("Tailscale-User-Login"))
+
+		// Fallback: direct connection (kernel-mode Tailscale, client reaches
+		// the tailscale IP directly). Resolve via `tailscale whois`.
+		if user == "" {
+			var werr error
+			user, werr = m.whois.Whois(r.Context(), ip)
+			if werr != nil {
+				if m.logger != nil {
+					m.logger.Warn("auth: whois failed and no Tailscale-User-Login header",
+						"ip", ip, "error", werr.Error())
+				}
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
 		}
 		if !m.allowAny {
 			if _, ok := m.allowedLowerSet[strings.ToLower(strings.TrimSpace(user))]; !ok {
