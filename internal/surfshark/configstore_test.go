@@ -1,6 +1,7 @@
 package surfshark_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -94,7 +95,7 @@ func TestConfigStore_RenderWG0Conf_UnknownLocation(t *testing.T) {
 	dir := t.TempDir()
 	s := surfshark.NewConfigStore(dir)
 	s.EnsureKeypair()
-	if _, err := s.RenderWG0Conf("nope", filepath.Join(dir, "wg0.conf")); err == nil {
+	if _, err := s.RenderWG0Conf("nope", filepath.Join(dir, "wg0.conf"), context.Background()); err == nil {
 		t.Fatal("expected error for unknown location")
 	}
 }

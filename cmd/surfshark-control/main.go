@@ -80,11 +80,21 @@ func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
 	o.logger.Info("switch start", "location", loc)
 	// Tear down any prior routes/interface from the previous location.
 	o.wg.RemoveDefaultRoutes(ctx, o.st.Surfshark.CurrentEndpointIP, "eth0")
-	_ = o.wg.Down(ctx, "wg0")
+	o.logger.Info("switch routes removed")
 
-	endpointIP, err := o.store.RenderWG0Conf(loc, wg0OutPath)
+	downCtx, downCancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := o.wg.Down(downCtx, "wg0"); err != nil {
+		o.logger.Info("switch wg.Down skipped/failed (expected if wg0 absent)", "err", err.Error())
+	} else {
+		o.logger.Info("switch wg.Down ok")
+	}
+	downCancel()
+
+	renderCtx, renderCancel := context.WithTimeout(ctx, 5*time.Second)
+	endpointIP, err := o.store.RenderWG0Conf(loc, wg0OutPath, renderCtx)
+	renderCancel()
 	if err != nil {
-		return err
+		return fmt.Errorf("render wg0.conf: %w", err)
 	}
 	o.logger.Info("switch resolved endpoint", "location", loc, "endpoint_ip", endpointIP)
 	upCtx, upCancel := context.WithTimeout(ctx, 30*time.Second)

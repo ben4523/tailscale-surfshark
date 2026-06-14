@@ -1,6 +1,7 @@
 package surfshark
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -165,7 +166,10 @@ func (s *ConfigStore) loadServer(slug string) (*Server, error) {
 // policy routing relies on.
 //
 // DNS line is intentionally omitted (see spec §6.3 — exit node uses public DNS).
-func (s *ConfigStore) RenderWG0Conf(slug, outPath string) (endpointIP string, err error) {
+//
+// The ctx is honored for the DNS lookup of the peer endpoint, which is the
+// only step here that does any I/O.
+func (s *ConfigStore) RenderWG0Conf(slug, outPath string, ctx context.Context) (endpointIP string, err error) {
 	srv, err := s.loadServer(slug)
 	if err != nil {
 		return "", fmt.Errorf("location %q not found in cache: %w", slug, err)
@@ -174,7 +178,8 @@ func (s *ConfigStore) RenderWG0Conf(slug, outPath string) (endpointIP string, er
 	// Pre-resolve hostname → IPv4 so we have the literal address to install
 	// the /32 exception route later. Also bypasses any DNS lookups that would
 	// happen after we change the default route to wg0.
-	ips, err := net.LookupIP(srv.ConnectionName)
+	resolver := &net.Resolver{}
+	ips, err := resolver.LookupIP(ctx, "ip4", srv.ConnectionName)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s: %w", srv.ConnectionName, err)
 	}
