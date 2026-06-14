@@ -1,0 +1,26 @@
+# Runtime state — populated by the container at runtime with restrictive perms
+# (0600/0700) that the Docker build daemon can't read. Must never be in build
+# context anyway.
+data/
+
+# Secrets
+.env
+.env.local
+
+# Build artifacts
+bin/
+dist/
+
+# VCS / dev tooling
+.git/
+.github/
+.vscode/
+.idea/
+.DS_Store
+
+# Tests / docs not needed in the image
+test/
+docs/
+
+# Already in the binary via //go:embed; not needed at runtime
+# (keep web/ — it's embedded at build time, so it must be in the context)
