@@ -87,11 +87,15 @@ func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
 		return err
 	}
 	o.logger.Info("switch resolved endpoint", "location", loc, "endpoint_ip", endpointIP)
-	if err := o.wg.Up(ctx, wg0OutPath); err != nil {
+	upCtx, upCancel := context.WithTimeout(ctx, 30*time.Second)
+	if err := o.wg.Up(upCtx, wg0OutPath); err != nil {
+		upCancel()
 		return fmt.Errorf("wg-quick up: %w", err)
 	}
+	upCancel()
+	o.logger.Info("switch wg0 up", "location", loc)
 	if err := o.wg.InstallDefaultRoutes(ctx, endpointIP, "eth0"); err != nil {
-		_ = o.wg.Down(ctx, "wg0")
+		_ = o.wg.Down(context.Background(), "wg0")
 		return fmt.Errorf("install routes: %w", err)
 	}
 	o.logger.Info("switch routes installed", "location", loc, "endpoint_ip", endpointIP)
@@ -176,6 +180,7 @@ func main() {
 		logger.Warn("SURFSHARK_PRIVATE_KEY not set — wg0 will not handshake until you set it from my.surfshark.com manual setup")
 	}
 	wgCtrl := wireguard.New()
+	wgCtrl.SetLogger(logger)
 	ipt := iptables.New()
 	apiBase := os.Getenv("SURFSHARK_API_BASE")
 	if apiBase == "" {

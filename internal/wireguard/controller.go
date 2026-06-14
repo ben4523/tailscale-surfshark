@@ -24,10 +24,34 @@ func (execRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	return out, nil
 }
 
-type Controller struct{ r Runner }
+type Logger interface {
+	Info(msg string, kv ...any)
+	Warn(msg string, kv ...any)
+}
+
+type Controller struct {
+	r Runner
+	l Logger
+}
 
 func New() *Controller                   { return &Controller{r: execRunner{}} }
 func NewWithRunner(r Runner) *Controller { return &Controller{r: r} }
+
+// SetLogger enables per-command diagnostic logging. Without it the controller
+// is silent (useful for unit tests).
+func (c *Controller) SetLogger(l Logger) { c.l = l }
+
+func (c *Controller) logInfo(msg string, kv ...any) {
+	if c.l != nil {
+		c.l.Info(msg, kv...)
+	}
+}
+
+func (c *Controller) logWarn(msg string, kv ...any) {
+	if c.l != nil {
+		c.l.Warn(msg, kv...)
+	}
+}
 
 func (c *Controller) Up(ctx context.Context, confPath string) error {
 	if _, err := c.r.Run(ctx, "wg-quick", "up", confPath); err != nil {
@@ -52,30 +76,39 @@ func (c *Controller) Down(ctx context.Context, ifaceOrPath string) error {
 }
 
 // InstallDefaultRoutes wires the kernel routing so all traffic exits via wg0
-// except the connection to the Surfshark peer itself. Avoids wg-quick's
-// policy-routing path (which requires writing the src_valid_mark sysctl —
-// blocked on Synology DSM).
-//
-// Layout:
-//
-//	<endpointIP>/32 dev <lanIface>  : keep WG <-> peer traffic on the LAN
-//	0.0.0.0/1 dev wg0               : half-default 1
-//	128.0.0.0/1 dev wg0             : half-default 2
-//
-// The two /1 routes are more specific than the host's pre-existing default
-// (0.0.0.0/0) so they win without us having to touch the original default.
+// except the connection to the Surfshark peer itself.
 func (c *Controller) InstallDefaultRoutes(ctx context.Context, endpointIP, lanIface string) error {
-	cmds := [][]string{
-		{"ip", "route", "add", endpointIP + "/32", "dev", lanIface},
-		{"ip", "route", "add", "0.0.0.0/1", "dev", "wg0"},
-		{"ip", "route", "add", "128.0.0.0/1", "dev", "wg0"},
-	}
-	for _, cmd := range cmds {
-		if _, err := c.r.Run(ctx, cmd[0], cmd[1:]...); err != nil {
-			c.RemoveDefaultRoutes(context.Background(), endpointIP, lanIface)
-			return err
+	// Hard timeout per command so a stalled netlink call can't hang the whole
+	// request indefinitely.
+	step := func(label string, args ...string) error {
+		c.logInfo("routes: "+label, "cmd", strings.Join(args, " "))
+		stepCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		out, err := c.r.Run(stepCtx, args[0], args[1:]...)
+		if err != nil {
+			c.logWarn("routes: step failed", "label", label, "err", err.Error(), "out", string(out))
 		}
+		return err
 	}
+
+	// Defensive: make sure wg0 is actually up before we attach routes to it.
+	// wg-quick should have done this, but the userspace impl sometimes races.
+	if err := step("link-up", "ip", "link", "set", "dev", "wg0", "up"); err != nil {
+		return err
+	}
+	if err := step("peer-exception", "ip", "route", "add", endpointIP+"/32", "dev", lanIface); err != nil {
+		c.RemoveDefaultRoutes(context.Background(), endpointIP, lanIface)
+		return err
+	}
+	if err := step("half-default-low", "ip", "route", "add", "0.0.0.0/1", "dev", "wg0"); err != nil {
+		c.RemoveDefaultRoutes(context.Background(), endpointIP, lanIface)
+		return err
+	}
+	if err := step("half-default-high", "ip", "route", "add", "128.0.0.0/1", "dev", "wg0"); err != nil {
+		c.RemoveDefaultRoutes(context.Background(), endpointIP, lanIface)
+		return err
+	}
+	c.logInfo("routes: installed", "peer", endpointIP, "via_iface", "wg0")
 	return nil
 }
 
