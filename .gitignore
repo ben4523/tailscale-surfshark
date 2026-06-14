@@ -1,0 +1,21 @@
+# Build artifacts
+/bin/
+/dist/
+/surfshark-control
+
+# Local env
+.env
+.env.local
+
+# Local data (volume mount target)
+/data/
+
+# Go
+*.test
+*.out
+vendor/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
