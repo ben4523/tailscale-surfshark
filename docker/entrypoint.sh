@@ -18,6 +18,9 @@ if [[ "$(cat /proc/sys/net/ipv4/ip_forward)" != "1" ]]; then
 fi
 
 # Start tailscaled in background, state in /data/tailscale.
+# TS_DEBUG_FIREWALL_MODE forces nftables (DSM kernel rejects iptables-nft
+# legacy extensions like xt_MASQUERADE — see project README §Troubleshooting).
+TS_DEBUG_FIREWALL_MODE=nftables \
 tailscaled \
   --state=/data/tailscale/tailscaled.state \
   --socket=/var/run/tailscale/tailscaled.sock \
