@@ -54,20 +54,42 @@ func (c *Controller) logWarn(msg string, kv ...any) {
 }
 
 func (c *Controller) Up(ctx context.Context, confPath string) error {
-	if _, err := c.r.Run(ctx, "wg-quick", "up", confPath); err != nil {
-		return err
-	}
-	// wireguard-go (userspace) sometimes returns from its parent process a
-	// hair before the kernel TUN device is queryable. Spin briefly (up to ~2s)
-	// until `ip link show wg0` succeeds — then any follow-up `ip route add ...
-	// dev wg0` will not race.
-	for i := 0; i < 20; i++ {
+	// wireguard-go (userspace) is observed to sometimes block its parent
+	// after the TUN is created, so wg-quick can hang waiting for it. Decouple:
+	// run wg-quick in a goroutine; in parallel, poll `ip link show wg0`. As
+	// soon as wg0 is visible, return success regardless of whether wg-quick
+	// has finished yet.
+	upCtx, upCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer upCancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.r.Run(upCtx, "wg-quick", "up", confPath)
+		done <- err
+	}()
+
+	deadline := time.After(10 * time.Second)
+	for {
 		if _, err := c.r.Run(ctx, "ip", "link", "show", "wg0"); err == nil {
+			c.logInfo("wg-quick: wg0 visible, proceeding (background wg-quick may still be running)")
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case err := <-done:
+			if err != nil {
+				return fmt.Errorf("wg-quick up: %w", err)
+			}
+			// wg-quick exited; give wg0 one more 200ms chance.
+			time.Sleep(200 * time.Millisecond)
+			if _, err := c.r.Run(ctx, "ip", "link", "show", "wg0"); err == nil {
+				return nil
+			}
+			return fmt.Errorf("wg-quick up exited ok but wg0 never appeared")
+		case <-deadline:
+			return fmt.Errorf("wg-quick up: wg0 never appeared within 10s")
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
-	return fmt.Errorf("wg-quick up returned ok but wg0 never appeared (within 2s)")
 }
 
 func (c *Controller) Down(ctx context.Context, ifaceOrPath string) error {
