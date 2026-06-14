@@ -34,30 +34,35 @@ func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) ([]by
 }
 
 func TestUp_CallsWGQuick(t *testing.T) {
+	// fakeRunner returns nil for everything, so 'ip link show wg0' looks
+	// like wg0 is up — Up will return as soon as it sees wg0.
 	r := &fakeRunner{out: map[string]string{}}
 	c := wireguard.NewWithRunner(r)
 	if err := c.Up(context.Background(), "/etc/wireguard/wg0.conf"); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.calls) < 1 || r.calls[0] != "wg-quick up /etc/wireguard/wg0.conf" {
-		t.Errorf("first call = %v, want wg-quick up...", r.calls)
-	}
-	// Up also polls 'ip link show wg0' until the interface is queryable.
-	foundLinkShow := false
+	// Both commands must have been issued (in either order — wg-quick runs in
+	// a goroutine, the poll runs in the main loop).
+	got := map[string]bool{}
+	r.mu.Lock()
 	for _, c := range r.calls {
-		if c == "ip link show wg0" {
-			foundLinkShow = true
-			break
-		}
+		got[c] = true
 	}
-	if !foundLinkShow {
-		t.Errorf("expected an 'ip link show wg0' poll, calls = %v", r.calls)
+	r.mu.Unlock()
+	if !got["wg-quick up /etc/wireguard/wg0.conf"] {
+		t.Errorf("wg-quick up never called; calls = %v", r.calls)
+	}
+	if !got["ip link show wg0"] {
+		t.Errorf("'ip link show wg0' never called; calls = %v", r.calls)
 	}
 }
 
 func TestUp_FailureBubbles(t *testing.T) {
+	// wg-quick fails AND the kernel has no wg0 to show. This mirrors reality:
+	// if wg-quick can't create the interface, 'ip link show wg0' fails too.
 	r := &fakeRunner{err: map[string]error{
 		"wg-quick up /etc/wireguard/wg0.conf": errors.New("nope"),
+		"ip link show wg0":                    errors.New("Device \"wg0\" does not exist."),
 	}, out: map[string]string{}}
 	c := wireguard.NewWithRunner(r)
 	if err := c.Up(context.Background(), "/etc/wireguard/wg0.conf"); err == nil {
