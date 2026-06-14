@@ -1,97 +1,76 @@
-// Package surfshark wraps the Surfshark account API for WireGuard provisioning.
+// Package surfshark talks to Surfshark's public WireGuard cluster API.
 //
-// Surfshark does not publish an official API spec. The endpoints used here are
-// based on the working assumption derived from community reverse-engineering work
-// (see e.g. github.com/Wikinaut/surfshark-wireguard-cli). Endpoints to verify at
-// integration time:
+// The login endpoint (POST /v1/auth/login) is gated by a Cloudflare bot
+// challenge that a stock Go HTTP client cannot solve. The good news: the
+// server cluster list is reachable WITHOUT authentication at
+// GET https://api.surfshark.com/v4/server/clusters/generic.
 //
-//   - POST /v1/auth/login                       {username, password} -> {token, renewToken}
-//   - POST /v1/account/users/public-keys        {pubKey}             -> 200 (or 4xx with "already exists" treated as idempotent success)
-//   - GET  /v4/server/clusters/generic                              -> []Server
+// So we skip login entirely. The operator generates a WireGuard keypair
+// once via https://my.surfshark.com/vpn/manual-setup/main/wireguard (one
+// click) and supplies the private key via SURFSHARK_PRIVATE_KEY env var.
+// The same keypair works against every Surfshark WG server.
 //
-// If Surfshark changes these paths, adjust here and update the spec accordingly.
+// Response shape verified against api.surfshark.com on 2026-06-14.
 package surfshark
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 )
 
+// Server is one row from /v4/server/clusters/generic, kept minimal to the
+// fields we actually use.
 type Server struct {
-	ID             string `json:"id"`
-	Country        string `json:"country"`
-	CountryCode    string `json:"country_code"`
-	Location       string `json:"location"`
-	ConnectionName string `json:"connection_name"`
-	PubKey         string `json:"pub_key"`
-	Host           string `json:"host"`
+	ID             string `json:"id"`             // UUID
+	Country        string `json:"country"`        // "United States"
+	CountryCode    string `json:"countryCode"`    // "us"
+	Location       string `json:"location"`       // "New York"
+	Region         string `json:"region"`         // "Americas"
+	ConnectionName string `json:"connectionName"` // "us-nyc.prod.surfshark.com"
+	PubKey         string `json:"pubKey"`         // peer pubkey (base64)
+	Load           int    `json:"load"`
+}
+
+// Slug returns the human-friendly short ID derived from ConnectionName,
+// e.g. "us-nyc.prod.surfshark.com" -> "us-nyc".
+func (s Server) Slug() string {
+	if i := strings.IndexByte(s.ConnectionName, '.'); i > 0 {
+		return s.ConnectionName[:i]
+	}
+	return s.ConnectionName
+}
+
+// Display returns a label suitable for a dropdown, e.g. "us-nyc — New York, US".
+func (s Server) Display() string {
+	cc := strings.ToUpper(s.CountryCode)
+	if s.Location != "" {
+		return fmt.Sprintf("%s — %s, %s", s.Slug(), s.Location, cc)
+	}
+	return fmt.Sprintf("%s — %s", s.Slug(), cc)
 }
 
 type Client struct {
-	base string
-	h    *http.Client
+	base      string
+	userAgent string
+	h         *http.Client
 }
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		base: strings.TrimRight(baseURL, "/"),
-		h:    &http.Client{Timeout: 15 * time.Second},
+		base:      strings.TrimRight(baseURL, "/"),
+		userAgent: "SurfsharkLinux/1.4.5 (tailscale-surfshark)",
+		h:         &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
-func (c *Client) Login(ctx context.Context, user, pass string) (string, error) {
-	body, _ := json.Marshal(map[string]string{"username": user, "password": pass})
-	req, _ := http.NewRequestWithContext(ctx, "POST", c.base+"/v1/auth/login", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.h.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("login: HTTP %d", resp.StatusCode)
-	}
-	var out struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
-	}
-	if out.Token == "" {
-		return "", fmt.Errorf("login: empty token")
-	}
-	return out.Token, nil
-}
-
-func (c *Client) RegisterPubKey(ctx context.Context, token, pubKey string) error {
-	body, _ := json.Marshal(map[string]string{"pubKey": pubKey})
-	req, _ := http.NewRequestWithContext(ctx, "POST", c.base+"/v1/account/users/public-keys", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := c.h.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	}
-	b, _ := io.ReadAll(resp.Body)
-	if strings.Contains(strings.ToLower(string(b)), "already exists") {
-		return nil // idempotent
-	}
-	return fmt.Errorf("register pubkey: HTTP %d: %s", resp.StatusCode, string(b))
-}
-
-func (c *Client) ListServers(ctx context.Context, token string) ([]Server, error) {
+// ListServers returns all Surfshark "generic" WireGuard clusters. No auth.
+func (c *Client) ListServers(ctx context.Context) ([]Server, error) {
 	req, _ := http.NewRequestWithContext(ctx, "GET", c.base+"/v4/server/clusters/generic", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("User-Agent", c.userAgent)
 	resp, err := c.h.Do(req)
 	if err != nil {
 		return nil, err

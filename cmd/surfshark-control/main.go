@@ -98,21 +98,7 @@ func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
 }
 
 func (o *Ops) Refresh(ctx context.Context) error {
-	if o.cfg.SurfsharkEmail == "" || o.cfg.SurfsharkPassword == "" {
-		return fmt.Errorf("SURFSHARK_EMAIL/PASSWORD not set")
-	}
-	tok, err := o.api.Login(ctx, o.cfg.SurfsharkEmail, o.cfg.SurfsharkPassword)
-	if err != nil {
-		return err
-	}
-	_, pub, err := o.store.EnsureKeypair()
-	if err != nil {
-		return err
-	}
-	if err := o.api.RegisterPubKey(ctx, tok, pub); err != nil {
-		return err
-	}
-	servers, err := o.api.ListServers(ctx, tok)
+	servers, err := o.api.ListServers(ctx)
 	if err != nil {
 		return err
 	}
@@ -123,6 +109,7 @@ func (o *Ops) Refresh(ctx context.Context) error {
 	o.st.Surfshark.LastRefresh = &now
 	_ = o.st.Save(statePath)
 	o.bus.Publish(eventbus.Event{Type: "refresh_complete"})
+	o.logger.Info("surfshark refresh", "servers", len(servers))
 	return nil
 }
 
@@ -166,6 +153,11 @@ func main() {
 	bus := eventbus.New(64)
 	tsCli := tsc.New()
 	store := surfshark.NewConfigStore(confDir)
+	if cfg.SurfsharkPrivateKey != "" {
+		store.SetEnvPrivateKey(cfg.SurfsharkPrivateKey)
+	} else {
+		logger.Warn("SURFSHARK_PRIVATE_KEY not set — wg0 will not handshake until you set it from my.surfshark.com manual setup")
+	}
 	wgCtrl := wireguard.New()
 	ipt := iptables.New()
 	apiBase := os.Getenv("SURFSHARK_API_BASE")
@@ -180,9 +172,9 @@ func main() {
 		bus: bus, cfg: cfg,
 	}
 
-	// First-boot cache fill if env present and no cache:
+	// Always refresh on boot if cache is empty (now requires no credentials).
 	available, _ := store.List()
-	if len(available) == 0 && cfg.SurfsharkEmail != "" {
+	if len(available) == 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		if err := ops.Refresh(ctx); err != nil {
 			logger.Warn("first-boot refresh failed", "error", err.Error())

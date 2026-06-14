@@ -31,18 +31,27 @@ See [`docs/superpowers/specs/2026-06-14-tailscale-surfshark-design.md`](docs/sup
    nano .env
    ```
 
-   Required: `TS_AUTHKEY`, `TS_ALLOWED_USERS`, `SURFSHARK_EMAIL`, `SURFSHARK_PASSWORD`.
+   Required: `TS_AUTHKEY`, `TS_ALLOWED_USERS`, `SURFSHARK_PRIVATE_KEY`.
 
-4. In the Tailscale admin: generate a **reusable, no-expiry pre-auth key** tagged `tag:exit-node`. In your tailnet ACL, ensure `autoApprovers.exitNode` includes `tag:exit-node` so the new device doesn't require manual approval.
-5. Bring it up:
+4. **Generate your Surfshark WireGuard private key** (one-time, ~30 seconds):
+   - Log in at https://my.surfshark.com/vpn/manual-setup/main/wireguard
+   - "I don't have a key pair" → "Generate a new key pair"
+   - Click any location → "Download" the `.conf` file
+   - Open it, copy the value after `PrivateKey = ...`
+   - Paste into `SURFSHARK_PRIVATE_KEY=` in `.env`
+
+   The same private key works against every Surfshark WireGuard server, so this step is only needed once. The container fetches the server list automatically without any Surfshark login.
+
+5. In the Tailscale admin: generate a **reusable, no-expiry pre-auth key** tagged `tag:exit-node`. In your tailnet ACL, ensure `autoApprovers.exitNode` includes `tag:exit-node` so the new device doesn't require manual approval.
+6. Bring it up:
 
    ```bash
    docker compose up -d --build
    ```
 
-6. In the Tailscale admin, the new device should appear (default hostname: `synology-surfshark-exit`).
-7. Open the UI from any device on your tailnet: browse to `http://<tailnet-ip-of-exit-node>:8080`. Identity is verified through Tailscale — only emails listed in `TS_ALLOWED_USERS` get in.
-8. On client devices that should use the exit node: Tailscale admin → device → "Use exit node" → pick `synology-surfshark-exit`.
+7. In the Tailscale admin, the new device should appear (default hostname: `synology-surfshark-exit`).
+8. Open the UI from any device on your tailnet: browse to `http://<tailnet-ip-of-exit-node>:8080`. Identity is verified through Tailscale — only emails listed in `TS_ALLOWED_USERS` get in.
+9. On client devices that should use the exit node: Tailscale admin → device → "Use exit node" → pick `synology-surfshark-exit`.
 
 ## Environment variables
 
@@ -51,14 +60,13 @@ See [`docs/superpowers/specs/2026-06-14-tailscale-surfshark-design.md`](docs/sup
 | `TS_AUTHKEY` | yes | — | Tailscale pre-auth key, tagged `tag:exit-node` |
 | `TS_ALLOWED_USERS` | yes | — | Comma-separated tailnet emails allowed to use the UI |
 | `TS_HOSTNAME` | no | `synology-surfshark-exit` | Shown in the Tailscale admin |
-| `SURFSHARK_EMAIL` | no¹ | — | Required to auto-fetch the location list |
-| `SURFSHARK_PASSWORD` | no¹ | — | Same |
+| `SURFSHARK_PRIVATE_KEY` | yes¹ | — | Base64 WG private key, generated once on `my.surfshark.com` |
 | `KILL_SWITCH` | no | `true` | If `true`, exit-node clients lose internet when wg0 is down |
 | `FAILOVER` | no | `true` | If `true`, watchdog switches to next preferred location when wg0 stays unhealthy |
 | `SURFSHARK_API_BASE` | no | `https://api.surfshark.com` | Override for testing |
 | `LOG_LEVEL` | no | `info` | `debug` / `info` / `warn` / `error` |
 
-¹ Optional, but if both are unset and `./data/surfshark/configs/` is empty, the UI will only have manually-dropped configs to choose from.
+¹ The server list (`./data/surfshark/configs/`) populates without it. The private key is only required for the actual WireGuard handshake to succeed.
 
 ## Manual verification checklist
 

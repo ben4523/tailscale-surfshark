@@ -5,93 +5,79 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/bbitton/tailscale-surfshark/internal/surfshark"
 )
 
-func TestLogin(t *testing.T) {
+func TestListServers_NoAuth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/auth/login" {
+		if r.URL.Path != "/v4/server/clusters/generic" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		var body map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["username"] != "u" || body["password"] != "p" {
-			t.Errorf("bad body: %v", body)
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("must not send Authorization for public endpoint")
 		}
-		json.NewEncoder(w).Encode(map[string]string{"token": "tok", "renewToken": "rt"})
-	}))
-	defer srv.Close()
-
-	c := surfshark.NewClient(srv.URL)
-	tok, err := c.Login(context.Background(), "u", "p")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tok != "tok" {
-		t.Errorf("token = %q", tok)
-	}
-}
-
-func TestLogin_BadCreds(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"message":"invalid creds"}`, http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-	c := surfshark.NewClient(srv.URL)
-	_, err := c.Login(context.Background(), "u", "p")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Errorf("err = %v", err)
-	}
-}
-
-func TestRegisterPubKey_OK(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer tok" {
-			t.Errorf("missing bearer")
+		if r.Header.Get("User-Agent") == "" {
+			t.Errorf("must send User-Agent (Cloudflare blocks bare clients)")
 		}
-		w.WriteHeader(200)
-	}))
-	defer srv.Close()
-	c := surfshark.NewClient(srv.URL)
-	if err := c.RegisterPubKey(context.Background(), "tok", "PUBKEY=="); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestRegisterPubKey_AlreadyExists_IsIdempotent(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"message":"public key already exists"}`, http.StatusBadRequest)
-	}))
-	defer srv.Close()
-	c := surfshark.NewClient(srv.URL)
-	if err := c.RegisterPubKey(context.Background(), "tok", "PUBKEY=="); err != nil {
-		t.Fatalf("should be idempotent: %v", err)
-	}
-}
-
-func TestListServers(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]any{
-			{"id": "us-nyc", "country": "United States", "country_code": "us", "location": "New York", "connection_name": "us-nyc.prod.surfshark.com", "pub_key": "PUB1", "host": "1.2.3.4"},
-			{"id": "fr-par", "country": "France", "country_code": "fr", "location": "Paris", "connection_name": "fr-par.prod.surfshark.com", "pub_key": "PUB2", "host": "5.6.7.8"},
+			{
+				"id":             "uuid-1",
+				"country":        "United States",
+				"countryCode":    "us",
+				"region":         "Americas",
+				"location":       "New York",
+				"connectionName": "us-nyc.prod.surfshark.com",
+				"pubKey":         "PUB1",
+				"load":           42,
+			},
+			{
+				"id":             "uuid-2",
+				"country":        "France",
+				"countryCode":    "fr",
+				"region":         "Europe",
+				"location":       "Paris",
+				"connectionName": "fr-par.prod.surfshark.com",
+				"pubKey":         "PUB2",
+				"load":           18,
+			},
 		})
 	}))
 	defer srv.Close()
+
 	c := surfshark.NewClient(srv.URL)
-	servers, err := c.ListServers(context.Background(), "tok")
+	servers, err := c.ListServers(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(servers) != 2 {
 		t.Fatalf("got %d servers", len(servers))
 	}
-	if servers[0].ID != "us-nyc" {
-		t.Errorf("first id = %q", servers[0].ID)
+	if got, want := servers[0].Slug(), "us-nyc"; got != want {
+		t.Errorf("slug = %q, want %q", got, want)
+	}
+	if got, want := servers[0].Display(), "us-nyc — New York, US"; got != want {
+		t.Errorf("display = %q, want %q", got, want)
+	}
+}
+
+func TestListServers_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	c := surfshark.NewClient(srv.URL)
+	_, err := c.ListServers(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestSlug_FallsBackToConnectionNameWhenNoDots(t *testing.T) {
+	s := surfshark.Server{ConnectionName: "noformat"}
+	if got := s.Slug(); got != "noformat" {
+		t.Errorf("got %q", got)
 	}
 }

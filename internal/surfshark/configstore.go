@@ -14,19 +14,38 @@ import (
 )
 
 type ConfigStore struct {
-	dir string
+	dir     string
+	envPriv string // base64 private key supplied via env (preferred source)
 }
 
 func NewConfigStore(baseDir string) *ConfigStore {
 	return &ConfigStore{dir: baseDir}
 }
 
+// SetEnvPrivateKey records a private key supplied via env (SURFSHARK_PRIVATE_KEY).
+// When set, this overrides any local keypair generation: Surfshark's WG servers
+// only accept keypairs registered on their account, so the operator must paste
+// the private key they generated once via my.surfshark.com.
+func (s *ConfigStore) SetEnvPrivateKey(b64 string) {
+	s.envPriv = strings.TrimSpace(b64)
+}
+
 func (s *ConfigStore) keysDir() string    { return filepath.Join(s.dir, "keys") }
 func (s *ConfigStore) configsDir() string { return filepath.Join(s.dir, "configs") }
 
 // EnsureKeypair returns the WireGuard keypair (base64 priv, base64 pub).
-// Creates one if it doesn't exist; reuses it on subsequent calls.
+// Preference order: env-provided private key -> on-disk keypair -> freshly generated.
+// The "freshly generated" path is only useful for unit tests; in production
+// Surfshark won't accept a key it doesn't know.
 func (s *ConfigStore) EnsureKeypair() (priv, pub string, err error) {
+	if s.envPriv != "" {
+		p, perr := derivePublicKey(s.envPriv)
+		if perr != nil {
+			return "", "", fmt.Errorf("derive public key from SURFSHARK_PRIVATE_KEY: %w", perr)
+		}
+		return s.envPriv, p, nil
+	}
+
 	if err := os.MkdirAll(s.keysDir(), 0o700); err != nil {
 		return "", "", err
 	}
@@ -63,19 +82,38 @@ func (s *ConfigStore) EnsureKeypair() (priv, pub string, err error) {
 	return priv, pub, nil
 }
 
-// WriteAll caches one .json per server and removes obsolete ones.
+func derivePublicKey(b64Priv string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(b64Priv)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) != 32 {
+		return "", fmt.Errorf("private key must decode to 32 bytes, got %d", len(raw))
+	}
+	pub, err := curve25519.X25519(raw, curve25519.Basepoint)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(pub), nil
+}
+
+// WriteAll caches one .json per server (keyed by Slug) and removes obsolete ones.
 func (s *ConfigStore) WriteAll(servers []Server) error {
 	if err := os.MkdirAll(s.configsDir(), 0o700); err != nil {
 		return err
 	}
 	keep := map[string]bool{}
 	for _, srv := range servers {
+		slug := srv.Slug()
+		if slug == "" {
+			continue
+		}
 		data, _ := json.MarshalIndent(srv, "", "  ")
-		path := filepath.Join(s.configsDir(), srv.ID+".json")
+		path := filepath.Join(s.configsDir(), slug+".json")
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			return err
 		}
-		keep[srv.ID+".json"] = true
+		keep[slug+".json"] = true
 	}
 	entries, _ := os.ReadDir(s.configsDir())
 	for _, e := range entries {
@@ -104,8 +142,8 @@ func (s *ConfigStore) List() ([]string, error) {
 	return out, nil
 }
 
-func (s *ConfigStore) loadServer(id string) (*Server, error) {
-	data, err := os.ReadFile(filepath.Join(s.configsDir(), id+".json"))
+func (s *ConfigStore) loadServer(slug string) (*Server, error) {
+	data, err := os.ReadFile(filepath.Join(s.configsDir(), slug+".json"))
 	if err != nil {
 		return nil, err
 	}
@@ -116,12 +154,12 @@ func (s *ConfigStore) loadServer(id string) (*Server, error) {
 	return &srv, nil
 }
 
-// RenderWG0Conf writes a final wg0.conf at outPath for the given location.
+// RenderWG0Conf writes a final wg0.conf at outPath for the given location slug.
 // DNS line is intentionally omitted (see spec §6.3 — exit node uses public DNS).
-func (s *ConfigStore) RenderWG0Conf(locationID, outPath string) error {
-	srv, err := s.loadServer(locationID)
+func (s *ConfigStore) RenderWG0Conf(slug, outPath string) error {
+	srv, err := s.loadServer(slug)
 	if err != nil {
-		return fmt.Errorf("location %q not found in cache: %w", locationID, err)
+		return fmt.Errorf("location %q not found in cache: %w", slug, err)
 	}
 	priv, _, err := s.EnsureKeypair()
 	if err != nil {
@@ -136,6 +174,6 @@ PublicKey = %s
 AllowedIPs = 0.0.0.0/0
 Endpoint = %s:51820
 PersistentKeepalive = 25
-`, priv, srv.PubKey, srv.Host)
+`, priv, srv.PubKey, srv.ConnectionName)
 	return os.WriteFile(outPath, []byte(conf), 0o600)
 }

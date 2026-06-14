@@ -74,6 +74,21 @@ func TestLoad_KillSwitchFalse(t *testing.T) {
 	}
 }
 
+func TestLoad_SurfsharkPrivateKey(t *testing.T) {
+	env := map[string]string{
+		"TS_AUTHKEY":            "k",
+		"TS_ALLOWED_USERS":      "ben@example.com",
+		"SURFSHARK_PRIVATE_KEY": "  yAnzS6yQ1qjxlsR4cD0VmEgPm0BlHvfYI0XqA1mEnUE=  ",
+	}
+	c, err := config.LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SurfsharkPrivateKey != "yAnzS6yQ1qjxlsR4cD0VmEgPm0BlHvfYI0XqA1mEnUE=" {
+		t.Errorf("private key not trimmed: %q", c.SurfsharkPrivateKey)
+	}
+}
+
 func TestLoad_AllowedUserMembership(t *testing.T) {
 	env := map[string]string{
 		"TS_AUTHKEY":       "k",

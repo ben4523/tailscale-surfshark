@@ -7,20 +7,19 @@ import (
 )
 
 type Config struct {
-	TSAuthkey         string
-	TSHostname        string
-	TSAllowedUsers    []string
-	SurfsharkEmail    string
-	SurfsharkPassword string
-	KillSwitch        bool
-	Failover          bool
+	TSAuthkey           string
+	TSHostname          string
+	TSAllowedUsers      []string
+	SurfsharkPrivateKey string // base64 WG priv key, generated once on my.surfshark.com
+	KillSwitch          bool
+	Failover            bool
 }
 
 func Load() (*Config, error) {
 	env := map[string]string{}
 	for _, k := range []string{
 		"TS_AUTHKEY", "TS_HOSTNAME", "TS_ALLOWED_USERS",
-		"SURFSHARK_EMAIL", "SURFSHARK_PASSWORD",
+		"SURFSHARK_PRIVATE_KEY",
 		"KILL_SWITCH", "FAILOVER",
 	} {
 		if v, ok := os.LookupEnv(k); ok {
@@ -32,12 +31,11 @@ func Load() (*Config, error) {
 
 func LoadFromMap(env map[string]string) (*Config, error) {
 	c := &Config{
-		TSAuthkey:         env["TS_AUTHKEY"],
-		TSHostname:        defaultStr(env["TS_HOSTNAME"], "synology-surfshark-exit"),
-		SurfsharkEmail:    env["SURFSHARK_EMAIL"],
-		SurfsharkPassword: env["SURFSHARK_PASSWORD"],
-		KillSwitch:        parseBool(env["KILL_SWITCH"], true),
-		Failover:          parseBool(env["FAILOVER"], true),
+		TSAuthkey:           env["TS_AUTHKEY"],
+		TSHostname:          defaultStr(env["TS_HOSTNAME"], "synology-surfshark-exit"),
+		SurfsharkPrivateKey: strings.TrimSpace(env["SURFSHARK_PRIVATE_KEY"]),
+		KillSwitch:          parseBool(env["KILL_SWITCH"], true),
+		Failover:            parseBool(env["FAILOVER"], true),
 	}
 	if c.TSAuthkey == "" {
 		return nil, fmt.Errorf("TS_AUTHKEY is required")
