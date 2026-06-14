@@ -79,7 +79,11 @@ func (o *Ops) Toggle(ctx context.Context, on bool) error {
 func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
 	o.logger.Info("switch start", "location", loc)
 	// Tear down any prior routes/interface from the previous location.
-	o.wg.RemoveDefaultRoutes(ctx, o.st.Surfshark.CurrentEndpointIP, "eth0")
+	prevLan, _ := o.wg.DetectLANInterface(ctx)
+	if prevLan == "" {
+		prevLan = "eth0"
+	}
+	o.wg.RemoveDefaultRoutes(ctx, o.st.Surfshark.CurrentEndpointIP, prevLan)
 	o.logger.Info("switch routes removed")
 
 	downCtx, downCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -91,12 +95,13 @@ func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
 	downCancel()
 
 	renderCtx, renderCancel := context.WithTimeout(ctx, 5*time.Second)
-	endpointIP, err := o.store.RenderWG0Conf(loc, wg0OutPath, renderCtx)
+	endpointIPs, err := o.store.RenderWG0ConfAll(loc, wg0OutPath, renderCtx)
 	renderCancel()
 	if err != nil {
 		return fmt.Errorf("render wg0.conf: %w", err)
 	}
-	o.logger.Info("switch resolved endpoint", "location", loc, "endpoint_ip", endpointIP)
+	endpointIP := endpointIPs[0] // primary IP (state tracking only — all IPs get /32 exceptions below)
+	o.logger.Info("switch resolved endpoints", "location", loc, "endpoint_ips", endpointIPs)
 	upCtx, upCancel := context.WithTimeout(ctx, 30*time.Second)
 	if err := o.wg.Up(upCtx, wg0OutPath); err != nil {
 		upCancel()
@@ -104,9 +109,20 @@ func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
 	}
 	upCancel()
 	o.logger.Info("switch wg0 up", "location", loc)
-	if err := o.wg.InstallDefaultRoutes(ctx, endpointIP, "eth0"); err != nil {
+	lanIface, lerr := o.wg.DetectLANInterface(ctx)
+	if lerr != nil {
+		o.logger.Warn("could not detect LAN interface, falling back to eth0", "err", lerr.Error())
+		lanIface = "eth0"
+	}
+	o.logger.Info("switch lan iface", "iface", lanIface)
+	if err := o.wg.InstallDefaultRoutes(ctx, endpointIP, lanIface); err != nil {
 		_ = o.wg.Down(context.Background(), "wg0")
 		return fmt.Errorf("install routes: %w", err)
+	}
+	// Add /32 exceptions for the other resolved IPs too (hostname is
+	// load-balanced — Surfshark may pick any of these backends).
+	for _, ip := range endpointIPs[1:] {
+		_ = o.wg.AddPeerException(ctx, ip, lanIface)
 	}
 	o.logger.Info("switch routes installed", "location", loc, "endpoint_ip", endpointIP)
 

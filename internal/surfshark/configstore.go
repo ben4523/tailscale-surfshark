@@ -170,46 +170,64 @@ func (s *ConfigStore) loadServer(slug string) (*Server, error) {
 // The ctx is honored for the DNS lookup of the peer endpoint, which is the
 // only step here that does any I/O.
 func (s *ConfigStore) RenderWG0Conf(slug, outPath string, ctx context.Context) (endpointIP string, err error) {
+	endpointIPs, err := s.RenderWG0ConfAll(slug, outPath, ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(endpointIPs) == 0 {
+		return "", fmt.Errorf("no endpoint IPs resolved")
+	}
+	return endpointIPs[0], nil
+}
+
+// RenderWG0ConfAll renders the conf to match the format Surfshark's website
+// hands out verbatim — same DNS, no Table directive (we let wg-quick install
+// nothing because we override with Table=off via the in-memory conf, see below),
+// no PersistentKeepalive (Surfshark's own configs omit it), Endpoint pointing
+// at the hostname (load-balanced, lets Surfshark pick the right backend).
+//
+// Returns ALL resolved IPv4 addresses so the caller can install /32 exceptions
+// for each (since the hostname resolves to multiple backends, we want any of
+// them to bypass wg0).
+func (s *ConfigStore) RenderWG0ConfAll(slug, outPath string, ctx context.Context) (endpointIPs []string, err error) {
 	srv, err := s.loadServer(slug)
 	if err != nil {
-		return "", fmt.Errorf("location %q not found in cache: %w", slug, err)
+		return nil, fmt.Errorf("location %q not found in cache: %w", slug, err)
 	}
 
-	// Pre-resolve hostname → IPv4 so we have the literal address to install
-	// the /32 exception route later. Also bypasses any DNS lookups that would
-	// happen after we change the default route to wg0.
 	resolver := &net.Resolver{}
 	ips, err := resolver.LookupIP(ctx, "ip4", srv.ConnectionName)
 	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", srv.ConnectionName, err)
+		return nil, fmt.Errorf("resolve %s: %w", srv.ConnectionName, err)
 	}
 	for _, ip := range ips {
 		if v4 := ip.To4(); v4 != nil {
-			endpointIP = v4.String()
-			break
+			endpointIPs = append(endpointIPs, v4.String())
 		}
 	}
-	if endpointIP == "" {
-		return "", fmt.Errorf("no IPv4 for %s", srv.ConnectionName)
+	if len(endpointIPs) == 0 {
+		return nil, fmt.Errorf("no IPv4 for %s", srv.ConnectionName)
 	}
 
 	priv, _, err := s.EnsureKeypair()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	// Mirror Surfshark's downloaded .conf format exactly. Table=off keeps
+	// wg-quick from touching the routing table; main.go installs routes itself.
 	conf := fmt.Sprintf(`[Interface]
-PrivateKey = %s
 Address = 10.14.0.2/16
+PrivateKey = %s
+DNS = 162.252.172.57, 149.154.159.92
 Table = off
 
 [Peer]
 PublicKey = %s
 AllowedIPs = 0.0.0.0/0
 Endpoint = %s:51820
-PersistentKeepalive = 25
-`, priv, srv.PubKey, endpointIP)
+`, priv, srv.PubKey, endpointIPs[0])
 	if err := os.WriteFile(outPath, []byte(conf), 0o600); err != nil {
-		return "", err
+		return nil, err
 	}
-	return endpointIP, nil
+	return endpointIPs, nil
 }

@@ -107,6 +107,25 @@ func (c *Controller) Down(ctx context.Context, ifaceOrPath string) error {
 	return err
 }
 
+// DetectLANInterface returns the interface name carrying the host's default
+// route. Synology systems running Open vSwitch have an `eth0` slave that
+// can't be used directly; the real LAN interface is `ovs_eth0`. Reading the
+// default route avoids hard-coding either.
+func (c *Controller) DetectLANInterface(ctx context.Context) (string, error) {
+	out, err := c.r.Run(ctx, "ip", "route", "show", "default")
+	if err != nil {
+		return "", err
+	}
+	// "default via 192.168.0.1 dev ovs_eth0 ..."  -> we want "ovs_eth0"
+	fields := strings.Fields(string(out))
+	for i := 0; i < len(fields)-1; i++ {
+		if fields[i] == "dev" {
+			return fields[i+1], nil
+		}
+	}
+	return "", fmt.Errorf("no `dev` token in `ip route show default`: %q", string(out))
+}
+
 // InstallDefaultRoutes wires the kernel routing so all traffic exits via wg0
 // except the connection to the Surfshark peer itself.
 func (c *Controller) InstallDefaultRoutes(ctx context.Context, endpointIP, lanIface string) error {
@@ -128,20 +147,28 @@ func (c *Controller) InstallDefaultRoutes(ctx context.Context, endpointIP, lanIf
 	if err := step("link-up", "ip", "link", "set", "dev", "wg0", "up"); err != nil {
 		return err
 	}
-	if err := step("peer-exception", "ip", "route", "add", endpointIP+"/32", "dev", lanIface); err != nil {
+	if err := step("peer-exception", "ip", "route", "replace", endpointIP+"/32", "dev", lanIface); err != nil {
 		c.RemoveDefaultRoutes(context.Background(), endpointIP, lanIface)
 		return err
 	}
-	if err := step("half-default-low", "ip", "route", "add", "0.0.0.0/1", "dev", "wg0"); err != nil {
+	if err := step("half-default-low", "ip", "route", "replace", "0.0.0.0/1", "dev", "wg0"); err != nil {
 		c.RemoveDefaultRoutes(context.Background(), endpointIP, lanIface)
 		return err
 	}
-	if err := step("half-default-high", "ip", "route", "add", "128.0.0.0/1", "dev", "wg0"); err != nil {
+	if err := step("half-default-high", "ip", "route", "replace", "128.0.0.0/1", "dev", "wg0"); err != nil {
 		c.RemoveDefaultRoutes(context.Background(), endpointIP, lanIface)
 		return err
 	}
 	c.logInfo("routes: installed", "peer", endpointIP, "via_iface", "wg0")
 	return nil
+}
+
+// AddPeerException adds a single host route to keep traffic toward `ip`
+// off wg0 (so the WG control packets themselves can reach the peer).
+// Best-effort: silently ignored if the route already exists.
+func (c *Controller) AddPeerException(ctx context.Context, ip, lanIface string) error {
+	_, err := c.r.Run(ctx, "ip", "route", "replace", ip+"/32", "dev", lanIface)
+	return err
 }
 
 // RemoveDefaultRoutes is best-effort; missing-route errors are ignored.
