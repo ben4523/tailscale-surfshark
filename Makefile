@@ -1,7 +1,8 @@
-.PHONY: build test test-integration lint clean run
+.PHONY: build test smoke image lint clean run
 
 BIN := bin/surfshark-control
 PKG := ./...
+IMAGE := tailscale-surfshark:dev
 
 build:
 	go build -o $(BIN) ./cmd/surfshark-control
@@ -9,8 +10,11 @@ build:
 test:
 	go test -race -count=1 $(PKG)
 
-test-integration:
-	cd test/integration && docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from runner
+image:
+	docker build -t $(IMAGE) .
+
+smoke: image
+	bash test/integration/smoke.sh
 
 lint:
 	go vet $(PKG)
