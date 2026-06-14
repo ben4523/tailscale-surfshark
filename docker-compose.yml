@@ -12,6 +12,10 @@ services:
     sysctls:
       net.ipv4.ip_forward: "1"
       net.ipv6.conf.all.forwarding: "1"
+      # wg-quick sets this to make policy routing survive strict reverse-path
+      # filtering. /proc/sys is read-only inside Docker by default, so we have
+      # to opt in here or wg-quick fails to bring wg0 up.
+      net.ipv4.conf.all.src_valid_mark: "1"
     volumes:
       - ./data:/data
     env_file:
