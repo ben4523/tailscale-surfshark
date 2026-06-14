@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"embed"
 	"fmt"
-	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -22,10 +20,8 @@ import (
 	tsc "github.com/bbitton/tailscale-surfshark/internal/tailscale"
 	"github.com/bbitton/tailscale-surfshark/internal/watchdog"
 	"github.com/bbitton/tailscale-surfshark/internal/wireguard"
+	"github.com/bbitton/tailscale-surfshark/web"
 )
-
-//go:embed all:web
-var webFS embed.FS
 
 const (
 	dataDir    = "/data"
@@ -222,12 +218,7 @@ func main() {
 		Bus:     bus,
 		Ops:     ops,
 	})
-	sub, err := fs.Sub(webFS, "web")
-	if err != nil {
-		logger.Error("embed web/", "error", err.Error())
-		os.Exit(1)
-	}
-	srv.MountStatic(sub)
+	srv.MountStatic(web.FS)
 
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	defer rootCancel()
