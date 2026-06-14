@@ -60,23 +60,36 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 			ip = r.RemoteAddr
 		}
 
-		// Preferred: identity injected by `tailscale serve` (works in userspace-
-		// networking mode where the Tailscale IP isn't on a kernel interface, so
-		// our HTTP server binds 127.0.0.1 and Tailscale proxies in).
+		// Preferred: identity injected by `tailscale serve` over HTTPS.
 		user := strings.TrimSpace(r.Header.Get("Tailscale-User-Login"))
 
-		// Fallback: direct connection (kernel-mode Tailscale, client reaches
-		// the tailscale IP directly). Resolve via `tailscale whois`.
 		if user == "" {
-			var werr error
-			user, werr = m.whois.Whois(r.Context(), ip)
-			if werr != nil {
-				if m.logger != nil {
-					m.logger.Warn("auth: whois failed and no Tailscale-User-Login header",
-						"ip", ip, "error", werr.Error())
+			// No header. Two possible paths:
+			//
+			//   a) `tailscale serve --http=...` over plain HTTP. The serve proxy
+			//      strips the original client and presents the request from
+			//      loopback. Identity headers are only injected on HTTPS, so we
+			//      can't know who the caller is — but we DO know that
+			//      `tailscale serve` only accepts authenticated tailnet members,
+			//      so loopback is a proxy-vouched tailnet caller.
+			//
+			//   b) Direct connection from a Tailscale-routed IP (kernel mode).
+			//      Resolve identity via whois.
+			if isLoopback(ip) {
+				// Treat as a generic tailnet member. Real identity unknown.
+				// Allowed only when the operator opted into the wildcard (*).
+				user = "tailnet-member-via-serve"
+			} else {
+				var werr error
+				user, werr = m.whois.Whois(r.Context(), ip)
+				if werr != nil {
+					if m.logger != nil {
+						m.logger.Warn("auth: whois failed and no Tailscale-User-Login header",
+							"ip", ip, "error", werr.Error())
+					}
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
 				}
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
 			}
 		}
 		if !m.allowAny {
@@ -112,4 +125,15 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 func UserFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKey{}).(string)
 	return v
+}
+
+// isLoopback reports whether s is "127.0.0.1", "::1", or any other
+// loopback IP literal. Used to recognize callers proxied in by
+// `tailscale serve` whose original source IP is hidden.
+func isLoopback(s string) bool {
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
 }
