@@ -25,6 +25,8 @@ RUN apk add --no-cache curl tar ca-certificates && \
 
 FROM alpine:3.20
 RUN apk add --no-cache \
+    docker-cli \
+    docker-cli-compose \
     wireguard-tools \
     nftables \
     iptables \

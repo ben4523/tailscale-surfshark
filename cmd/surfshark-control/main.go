@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -114,47 +115,74 @@ func (o *Ops) Toggle(ctx context.Context, on bool) error {
 func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
 	o.logger.Info("switch location", "location", loc)
 
-	// "Country / City"  → switch by city (more specific). "Country" alone → country.
-	var err error
+	// Parse "Country / City" → country, optional city.
+	country, city := loc, ""
 	if idx := strings.Index(loc, " / "); idx > 0 {
-		city := strings.TrimSpace(loc[idx+3:])
-		err = o.g.SwitchCity(ctx, city)
-	} else {
-		err = o.g.SwitchCountry(ctx, strings.TrimSpace(loc))
-	}
-	if err != nil {
-		return err
+		country = strings.TrimSpace(loc[:idx])
+		city = strings.TrimSpace(loc[idx+3:])
 	}
 
-	// gluetun's PUT /v1/vpn/settings stores the new settings but does NOT
-	// force a reconnect on its own. Cycle the VPN to pick them up.
-	if err := o.g.SetRunning(ctx, false); err != nil {
-		o.logger.Warn("stop before reconnect failed", "err", err.Error())
-	}
-	time.Sleep(1 * time.Second)
-	if err := o.g.SetRunning(ctx, true); err != nil {
-		return fmt.Errorf("restart vpn after switch: %w", err)
+	// gluetun PUT /v1/vpn/settings stores prefs but doesn't reconnect on its
+	// own (we observed this). The reliable path is to rewrite .env and
+	// `docker compose up -d --force-recreate gluetun` — picks up new SERVER_*
+	// envs cleanly. Our container's netns drops briefly (~10-15s) while
+	// gluetun re-establishes, then Tailscale heals automatically.
+	if err := o.updateEnvSurfsharkLocation(country, city); err != nil {
+		return fmt.Errorf("update .env: %w", err)
 	}
 
 	o.st.Surfshark.CurrentLocation = loc
 	_ = o.st.Save(statePath)
 	o.bus.Publish(eventbus.Event{Type: "status_update"})
 
-	// Wait for the new public IP to materialize (gluetun re-queries it after
-	// reconnect, ~5-15s).
-	prevIP := o.st.Stats.PublicIP
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		if ip, err := o.g.PublicIP(ctx); err == nil && ip != "" && ip != prevIP {
-			o.st.Stats.PublicIP = ip
-			o.st.Stats.LastMeasured = time.Now().UTC()
-			_ = o.st.Save(statePath)
-			o.bus.Publish(eventbus.Event{Type: "status_update"})
-			return nil
-		}
-		time.Sleep(1 * time.Second)
+	// Detached subprocess: survives our own destruction. Recreating gluetun
+	// destroys the shared netns; we must also recreate ourselves so we re-join
+	// the new gluetun's netns. The subprocess (via Setsid) keeps running after
+	// we die so it can spawn the new us.
+	cmd := exec.Command("sh", "-c",
+		"sleep 1 && docker compose up -d --force-recreate gluetun tailscale-surfshark")
+	cmd.Dir = "/workspace"
+	cmd.Env = append(os.Environ(), "COMPOSE_PROJECT_NAME=tailscale-surfshark")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		o.logger.Error("detach docker compose", "err", err.Error())
 	}
-	return fmt.Errorf("public IP did not change within 30s (still %s)", prevIP)
+	// Don't wait — we'll be killed before it completes anyway.
+	return nil
+}
+
+// updateEnvSurfsharkLocation rewrites SURFSHARK_COUNTRY (and optionally a new
+// SURFSHARK_CITIES) in /workspace/.env, preserving every other line as-is.
+func (o *Ops) updateEnvSurfsharkLocation(country, city string) error {
+	const envPath = "/workspace/.env"
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	wroteCountry := false
+	wroteCities := false
+	for i, l := range lines {
+		switch {
+		case strings.HasPrefix(l, "SURFSHARK_COUNTRY="):
+			lines[i] = "SURFSHARK_COUNTRY=" + country
+			wroteCountry = true
+		case strings.HasPrefix(l, "SURFSHARK_CITIES="):
+			if city != "" {
+				lines[i] = "SURFSHARK_CITIES=" + city
+			} else {
+				lines[i] = "SURFSHARK_CITIES="
+			}
+			wroteCities = true
+		}
+	}
+	if !wroteCountry {
+		lines = append(lines, "SURFSHARK_COUNTRY="+country)
+	}
+	if !wroteCities && city != "" {
+		lines = append(lines, "SURFSHARK_CITIES="+city)
+	}
+	return os.WriteFile(envPath, []byte(strings.Join(lines, "\n")), 0o600)
 }
 
 func (o *Ops) Refresh(ctx context.Context) error {
@@ -214,18 +242,22 @@ func main() {
 
 	// Watchdog: poll gluetun status; publish updates and persist last public IP.
 	go func() {
-		t := time.NewTicker(30 * time.Second)
+		t := time.NewTicker(8 * time.Second)
 		defer t.Stop()
 		for {
 			select {
 			case <-rootCtx.Done():
 				return
 			case <-t.C:
-				if ip, err := g.PublicIP(rootCtx); err == nil {
-					st.Stats.PublicIP = ip
-					st.Stats.LastMeasured = time.Now().UTC()
-					_ = st.Save(statePath)
-					bus.Publish(eventbus.Event{Type: "status_update"})
+				// Skip writes when gluetun returns empty (still measuring after
+				// a reconnect) so the UI keeps showing the previous value.
+				if ip, err := g.PublicIP(rootCtx); err == nil && ip != "" {
+					if ip != st.Stats.PublicIP {
+						st.Stats.PublicIP = ip
+						st.Stats.LastMeasured = time.Now().UTC()
+						_ = st.Save(statePath)
+						bus.Publish(eventbus.Event{Type: "status_update"})
+					}
 				}
 			}
 		}

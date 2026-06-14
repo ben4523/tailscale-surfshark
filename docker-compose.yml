@@ -44,5 +44,15 @@ services:
       - /dev/net/tun:/dev/net/tun
     volumes:
       - ./data:/data
+      # mount the whole project dir RW so the daemon can edit .env and run
+      # `docker compose up -d --force-recreate gluetun` to apply a new country
+      - .:/workspace
+      # docker socket lets us call `docker compose` from inside this container
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /workspace
+    environment:
+      # docker compose needs the same project name as the host to find the
+      # existing gluetun container; otherwise it tries to create a duplicate.
+      COMPOSE_PROJECT_NAME: tailscale-surfshark
     env_file:
       - .env
