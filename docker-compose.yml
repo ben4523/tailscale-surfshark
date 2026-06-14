@@ -1,19 +1,45 @@
 services:
+  # gluetun fournit le tunnel Surfshark (OpenVPN) — l'auth se fait avec
+  # ton OPENVPN_USER/OPENVPN_PASSWORD Surfshark, pas avec une keypair WG.
+  # Tout container qui partage son netns (network_mode: "service:gluetun")
+  # sort automatiquement par le tunnel.
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: tss-gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    restart: unless-stopped
+    environment:
+      VPN_SERVICE_PROVIDER: surfshark
+      VPN_TYPE: openvpn
+      OPENVPN_USER: ${OPENVPN_USER}
+      OPENVPN_PASSWORD: ${OPENVPN_PASSWORD}
+      # Defaults at boot — overridden at runtime via gluetun's control API.
+      SERVER_COUNTRIES: ${SURFSHARK_COUNTRY:-France}
+      # Expose gluetun's control HTTP API on loopback for our daemon.
+      HTTP_CONTROL_SERVER_ADDRESS: 127.0.0.1:8000
+      HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /gluetun/auth/config.toml
+      TZ: Europe/Paris
+    volumes:
+      - ./data/gluetun:/gluetun
+      - ./gluetun-auth:/gluetun/auth:ro
+    # gluetun manages routes/iptables inside its own netns. We rely on its
+    # health check (the VPN is up when /v1/openvpn/status reports running).
+
   tailscale-surfshark:
     image: tailscale-surfshark:dev
     container_name: tailscale-surfshark
     build: .
     restart: unless-stopped
-    # host networking is required: with bridge networking, Synology DSM's
-    # UDP conntrack drops Surfshark's reply packets back through the Docker
-    # NAT, so wg0 handshakes but no data flows. In host mode wireguard-go
-    # binds directly on the Synology's interface and Surfshark talks to it
-    # without any intermediate NAT. Tailscale's `--tun=userspace-networking`
-    # ensures we don't clash with any existing host-side `tailscale0`.
-    network_mode: host
+    # Share gluetun's network namespace: our UDP/TCP egresses through its
+    # Surfshark tunnel automatically. No WG or iptables in this container.
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE
     devices:
       - /dev/net/tun:/dev/net/tun
     volumes:

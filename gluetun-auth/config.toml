@@ -1,0 +1,12 @@
+# gluetun control server roles. Loopback-only — no secret required since
+# only processes inside the shared netns (our Go daemon) can reach it.
+[[roles]]
+name = "tailscale-surfshark"
+routes = [
+  "GET /v1/openvpn/status",
+  "PUT /v1/openvpn/status",
+  "GET /v1/openvpn/settings",
+  "PUT /v1/vpn/settings",
+  "GET /v1/publicip/ip",
+]
+auth = "none"
