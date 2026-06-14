@@ -60,8 +60,10 @@ func (o *Ops) Toggle(ctx context.Context, on bool) error {
 			o.st.KillSwitch.CurrentlyArmed = true
 		}
 	} else {
+		o.wg.RemoveDefaultRoutes(ctx, o.st.Surfshark.CurrentEndpointIP, "eth0")
 		_ = o.wg.Down(ctx, "wg0")
 		o.st.Surfshark.Toggle = false
+		o.st.Surfshark.CurrentEndpointIP = ""
 		if o.cfg.KillSwitch {
 			_ = o.ipt.ArmKillSwitch(ctx, "tailscale0", "eth0")
 			o.st.KillSwitch.CurrentlyArmed = true
@@ -75,21 +77,33 @@ func (o *Ops) Toggle(ctx context.Context, on bool) error {
 }
 
 func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
-	if err := o.store.RenderWG0Conf(loc, wg0OutPath); err != nil {
+	// Tear down any prior routes/interface from the previous location.
+	o.wg.RemoveDefaultRoutes(ctx, o.st.Surfshark.CurrentEndpointIP, "eth0")
+	_ = o.wg.Down(ctx, "wg0")
+
+	endpointIP, err := o.store.RenderWG0Conf(loc, wg0OutPath)
+	if err != nil {
 		return err
 	}
-	_ = o.wg.Down(ctx, "wg0")
 	if err := o.wg.Up(ctx, wg0OutPath); err != nil {
 		return err
 	}
+	if err := o.wg.InstallDefaultRoutes(ctx, endpointIP, "eth0"); err != nil {
+		_ = o.wg.Down(ctx, "wg0")
+		return fmt.Errorf("install routes: %w", err)
+	}
+
+	o.st.Surfshark.CurrentLocation = loc
+	o.st.Surfshark.CurrentEndpointIP = endpointIP
+	_ = o.st.Save(statePath)
+	o.bus.Publish(eventbus.Event{Type: "status_update"})
+
+	// Connectivity probe.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("tcp", "1.1.1.1:53", 1*time.Second)
-		if err == nil {
+		c, derr := net.DialTimeout("tcp", "1.1.1.1:53", 1*time.Second)
+		if derr == nil {
 			c.Close()
-			o.st.Surfshark.CurrentLocation = loc
-			_ = o.st.Save(statePath)
-			o.bus.Publish(eventbus.Event{Type: "status_update"})
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)

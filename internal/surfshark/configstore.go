@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,26 +155,56 @@ func (s *ConfigStore) loadServer(slug string) (*Server, error) {
 	return &srv, nil
 }
 
-// RenderWG0Conf writes a final wg0.conf at outPath for the given location slug.
+// RenderWG0Conf writes a final wg0.conf at outPath for the given location slug
+// and returns the resolved endpoint IPv4 (needed by the caller to install the
+// /32 route exception that keeps WG-to-Surfshark traffic out of the wg0 tunnel).
+//
+// `Table = off` tells wg-quick NOT to install its own policy routing. The
+// caller (main.go) installs the equivalent routes manually because Synology
+// DSM doesn't let us write the src_valid_mark sysctl that wg-quick's default
+// policy routing relies on.
+//
 // DNS line is intentionally omitted (see spec §6.3 — exit node uses public DNS).
-func (s *ConfigStore) RenderWG0Conf(slug, outPath string) error {
+func (s *ConfigStore) RenderWG0Conf(slug, outPath string) (endpointIP string, err error) {
 	srv, err := s.loadServer(slug)
 	if err != nil {
-		return fmt.Errorf("location %q not found in cache: %w", slug, err)
+		return "", fmt.Errorf("location %q not found in cache: %w", slug, err)
 	}
+
+	// Pre-resolve hostname → IPv4 so we have the literal address to install
+	// the /32 exception route later. Also bypasses any DNS lookups that would
+	// happen after we change the default route to wg0.
+	ips, err := net.LookupIP(srv.ConnectionName)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", srv.ConnectionName, err)
+	}
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			endpointIP = v4.String()
+			break
+		}
+	}
+	if endpointIP == "" {
+		return "", fmt.Errorf("no IPv4 for %s", srv.ConnectionName)
+	}
+
 	priv, _, err := s.EnsureKeypair()
 	if err != nil {
-		return err
+		return "", err
 	}
 	conf := fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = 10.14.0.2/16
+Table = off
 
 [Peer]
 PublicKey = %s
 AllowedIPs = 0.0.0.0/0
 Endpoint = %s:51820
 PersistentKeepalive = 25
-`, priv, srv.PubKey, srv.ConnectionName)
-	return os.WriteFile(outPath, []byte(conf), 0o600)
+`, priv, srv.PubKey, endpointIP)
+	if err := os.WriteFile(outPath, []byte(conf), 0o600); err != nil {
+		return "", err
+	}
+	return endpointIP, nil
 }

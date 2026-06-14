@@ -22,6 +22,7 @@ type State struct {
 type SurfsharkState struct {
 	Toggle             bool       `json:"toggle"`
 	CurrentLocation    string     `json:"current_location"`
+	CurrentEndpointIP  string     `json:"current_endpoint_ip"` // resolved IPv4 of the active peer; needed to clean up the /32 route exception
 	PreferredLocations []string   `json:"preferred_locations"`
 	LastRefresh        *time.Time `json:"last_refresh"`
 	LastFailover       *time.Time `json:"last_failover"`

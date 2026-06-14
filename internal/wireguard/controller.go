@@ -39,6 +39,43 @@ func (c *Controller) Down(ctx context.Context, ifaceOrPath string) error {
 	return err
 }
 
+// InstallDefaultRoutes wires the kernel routing so all traffic exits via wg0
+// except the connection to the Surfshark peer itself. Avoids wg-quick's
+// policy-routing path (which requires writing the src_valid_mark sysctl —
+// blocked on Synology DSM).
+//
+// Layout:
+//
+//	<endpointIP>/32 dev <lanIface>  : keep WG <-> peer traffic on the LAN
+//	0.0.0.0/1 dev wg0               : half-default 1
+//	128.0.0.0/1 dev wg0             : half-default 2
+//
+// The two /1 routes are more specific than the host's pre-existing default
+// (0.0.0.0/0) so they win without us having to touch the original default.
+func (c *Controller) InstallDefaultRoutes(ctx context.Context, endpointIP, lanIface string) error {
+	cmds := [][]string{
+		{"ip", "route", "add", endpointIP + "/32", "dev", lanIface},
+		{"ip", "route", "add", "0.0.0.0/1", "dev", "wg0"},
+		{"ip", "route", "add", "128.0.0.0/1", "dev", "wg0"},
+	}
+	for _, cmd := range cmds {
+		if _, err := c.r.Run(ctx, cmd[0], cmd[1:]...); err != nil {
+			c.RemoveDefaultRoutes(context.Background(), endpointIP, lanIface)
+			return err
+		}
+	}
+	return nil
+}
+
+// RemoveDefaultRoutes is best-effort; missing-route errors are ignored.
+func (c *Controller) RemoveDefaultRoutes(ctx context.Context, endpointIP, lanIface string) {
+	_, _ = c.r.Run(ctx, "ip", "route", "del", "0.0.0.0/1", "dev", "wg0")
+	_, _ = c.r.Run(ctx, "ip", "route", "del", "128.0.0.0/1", "dev", "wg0")
+	if endpointIP != "" {
+		_, _ = c.r.Run(ctx, "ip", "route", "del", endpointIP+"/32", "dev", lanIface)
+	}
+}
+
 func (c *Controller) LastHandshake(ctx context.Context, iface string) (time.Time, error) {
 	out, err := c.r.Run(ctx, "wg", "show", iface, "latest-handshakes")
 	if err != nil {
