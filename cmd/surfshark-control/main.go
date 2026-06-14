@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,22 +39,66 @@ type Ops struct {
 	cfg    *config.Config
 }
 
-// AvailableLocations returns the country list gluetun supports for Surfshark.
-// Hard-coded for now; gluetun has them all built-in.
+// AvailableLocations returns a "Country / City" picker list. Switch behavior:
+// if the user picks "Country / City", we set city in gluetun; if "Country" only,
+// we set country. The Switch handler parses the slash.
 func (o *Ops) AvailableLocations() []string {
 	return []string{
-		"Albania", "Argentina", "Australia", "Austria", "Belgium", "Brazil",
-		"Bulgaria", "Canada", "Chile", "Colombia", "Costa Rica", "Croatia",
-		"Cyprus", "Czech Republic", "Denmark", "Estonia", "Finland", "France",
-		"Germany", "Greece", "Hong Kong", "Hungary", "Iceland", "India",
-		"Indonesia", "Ireland", "Israel", "Italy", "Japan", "Kazakhstan",
-		"Latvia", "Lithuania", "Luxembourg", "Malaysia", "Mexico",
-		"Netherlands", "New Zealand", "Nigeria", "North Macedonia", "Norway",
-		"Paraguay", "Philippines", "Poland", "Portugal", "Romania", "Serbia",
-		"Singapore", "Slovakia", "Slovenia", "South Africa", "South Korea",
-		"Spain", "Sweden", "Switzerland", "Taiwan", "Thailand", "Turkey",
-		"Ukraine", "United Arab Emirates", "United Kingdom", "United States",
-		"Vietnam",
+		// Format: "Country / City" (slash with spaces). City entries are the
+		// Surfshark city names gluetun uses internally.
+		"Australia / Sydney", "Australia / Melbourne",
+		"Austria / Vienna",
+		"Belgium / Brussels",
+		"Brazil / Sao Paulo",
+		"Bulgaria / Sofia",
+		"Canada / Montreal", "Canada / Toronto", "Canada / Vancouver",
+		"Chile / Santiago",
+		"Czech Republic / Prague",
+		"Denmark / Copenhagen",
+		"Finland / Helsinki",
+		"France / Paris", "France / Marseille",
+		"Germany / Berlin", "Germany / Frankfurt", "Germany / Munich",
+		"Greece / Athens",
+		"Hong Kong / Hong Kong",
+		"Hungary / Budapest",
+		"Iceland / Reykjavik",
+		"India / Chennai", "India / Indore", "India / Mumbai",
+		"Indonesia / Jakarta",
+		"Ireland / Dublin",
+		"Israel / Tel Aviv",
+		"Italy / Milan", "Italy / Rome",
+		"Japan / Tokyo",
+		"Latvia / Riga",
+		"Lithuania / Vilnius",
+		"Luxembourg / Steinsel",
+		"Malaysia / Kuala Lumpur",
+		"Mexico / Mexico City",
+		"Netherlands / Amsterdam",
+		"New Zealand / Auckland",
+		"Norway / Oslo",
+		"Philippines / Manila",
+		"Poland / Warsaw",
+		"Portugal / Lisbon",
+		"Romania / Bucharest",
+		"Serbia / Belgrade",
+		"Singapore / Singapore",
+		"Slovakia / Bratislava",
+		"Slovenia / Ljubljana",
+		"South Africa / Johannesburg",
+		"South Korea / Seoul",
+		"Spain / Madrid", "Spain / Barcelona",
+		"Sweden / Stockholm",
+		"Switzerland / Zurich",
+		"Taiwan / Taipei",
+		"Thailand / Bangkok",
+		"Turkey / Istanbul",
+		"Ukraine / Kyiv",
+		"United Arab Emirates / Dubai",
+		"United Kingdom / London", "United Kingdom / Manchester", "United Kingdom / Glasgow",
+		"United States / New York", "United States / Los Angeles",
+		"United States / Chicago", "United States / Miami", "United States / Seattle",
+		"United States / Dallas", "United States / San Francisco",
+		"Vietnam / Hanoi",
 	}
 }
 
@@ -66,24 +111,50 @@ func (o *Ops) Toggle(ctx context.Context, on bool) error {
 	return o.st.Save(statePath)
 }
 
-func (o *Ops) SwitchLocation(ctx context.Context, country string) error {
-	o.logger.Info("switch country", "country", country)
-	if err := o.g.SwitchCountry(ctx, country); err != nil {
+func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
+	o.logger.Info("switch location", "location", loc)
+
+	// "Country / City"  → switch by city (more specific). "Country" alone → country.
+	var err error
+	if idx := strings.Index(loc, " / "); idx > 0 {
+		city := strings.TrimSpace(loc[idx+3:])
+		err = o.g.SwitchCity(ctx, city)
+	} else {
+		err = o.g.SwitchCountry(ctx, strings.TrimSpace(loc))
+	}
+	if err != nil {
 		return err
 	}
-	o.st.Surfshark.CurrentLocation = country
+
+	// gluetun's PUT /v1/vpn/settings stores the new settings but does NOT
+	// force a reconnect on its own. Cycle the VPN to pick them up.
+	if err := o.g.SetRunning(ctx, false); err != nil {
+		o.logger.Warn("stop before reconnect failed", "err", err.Error())
+	}
+	time.Sleep(1 * time.Second)
+	if err := o.g.SetRunning(ctx, true); err != nil {
+		return fmt.Errorf("restart vpn after switch: %w", err)
+	}
+
+	o.st.Surfshark.CurrentLocation = loc
 	_ = o.st.Save(statePath)
 	o.bus.Publish(eventbus.Event{Type: "status_update"})
 
-	// Wait up to 15s for gluetun to report "running" again after reconnect.
-	deadline := time.Now().Add(15 * time.Second)
+	// Wait for the new public IP to materialize (gluetun re-queries it after
+	// reconnect, ~5-15s).
+	prevIP := o.st.Stats.PublicIP
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if s, err := o.g.Status(ctx); err == nil && s == "running" {
+		if ip, err := o.g.PublicIP(ctx); err == nil && ip != "" && ip != prevIP {
+			o.st.Stats.PublicIP = ip
+			o.st.Stats.LastMeasured = time.Now().UTC()
+			_ = o.st.Save(statePath)
+			o.bus.Publish(eventbus.Event{Type: "status_update"})
 			return nil
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 	}
-	return fmt.Errorf("gluetun did not report running within 15s after switch")
+	return fmt.Errorf("public IP did not change within 30s (still %s)", prevIP)
 }
 
 func (o *Ops) Refresh(ctx context.Context) error {

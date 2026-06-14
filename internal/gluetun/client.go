@@ -46,10 +46,17 @@ func (c *Client) SetRunning(ctx context.Context, running bool) error {
 	return c.do(ctx, "PUT", "/v1/openvpn/status", Status{Status: want}, nil)
 }
 
-type Settings struct {
+// PatchSettings is the partial settings body gluetun's PUT /v1/vpn/settings
+// expects (settings.VPN with OpenVPN.Provider.ServerSelection).
+type PatchSettings struct {
+	OpenVPN OpenVPNSection `json:"openvpn"`
+}
+type OpenVPNSection struct {
+	Provider ProviderSection `json:"provider"`
+}
+type ProviderSection struct {
 	ServerSelection ServerSelection `json:"server_selection"`
 }
-
 type ServerSelection struct {
 	Countries []string `json:"countries,omitempty"`
 	Cities    []string `json:"cities,omitempty"`
@@ -57,10 +64,20 @@ type ServerSelection struct {
 }
 
 // SwitchCountry tells gluetun to reconnect to a server in the given country.
-// gluetun reconciles the new settings by reconnecting under the hood.
+// The container's openvpn loop validates the new settings and reconnects.
 func (c *Client) SwitchCountry(ctx context.Context, country string) error {
-	settings := Settings{ServerSelection: ServerSelection{Countries: []string{country}}}
-	return c.do(ctx, "PUT", "/v1/vpn/settings", settings, nil)
+	body := PatchSettings{OpenVPN: OpenVPNSection{Provider: ProviderSection{
+		ServerSelection: ServerSelection{Countries: []string{country}},
+	}}}
+	return c.do(ctx, "PUT", "/v1/vpn/settings", body, nil)
+}
+
+// SwitchCity is like SwitchCountry but selects by city (overrides countries).
+func (c *Client) SwitchCity(ctx context.Context, city string) error {
+	body := PatchSettings{OpenVPN: OpenVPNSection{Provider: ProviderSection{
+		ServerSelection: ServerSelection{Cities: []string{city}},
+	}}}
+	return c.do(ctx, "PUT", "/v1/vpn/settings", body, nil)
 }
 
 func (c *Client) PublicIP(ctx context.Context) (string, error) {
