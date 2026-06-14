@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bbitton/tailscale-surfshark/internal/surfshark"
+	"github.com/ben4523/tailscale-surfshark/internal/surfshark"
 )
 
 // A known-good base64 WG private key (this one is just generated for test use).

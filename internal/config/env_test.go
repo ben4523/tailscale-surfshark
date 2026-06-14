@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bbitton/tailscale-surfshark/internal/config"
+	"github.com/ben4523/tailscale-surfshark/internal/config"
 )
 
 func TestLoad_MissingAuthkey(t *testing.T) {

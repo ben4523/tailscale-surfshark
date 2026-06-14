@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-14
 - **Status:** Approved (brainstorming complete, ready for implementation planning)
-- **Author:** 7571645+ben4523@users.noreply.github.com
+- **Author:** ben4523
 - **Target host:** Synology DS920+ (DSM 7, Container Manager)
 
 ## 1. Goal

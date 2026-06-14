@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bbitton/tailscale-surfshark/internal/eventbus"
+	"github.com/ben4523/tailscale-surfshark/internal/eventbus"
 )
 
 // NextCandidate returns the next location to try after `current` failed.

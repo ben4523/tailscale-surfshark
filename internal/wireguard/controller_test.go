@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bbitton/tailscale-surfshark/internal/wireguard"
+	"github.com/ben4523/tailscale-surfshark/internal/wireguard"
 )
 
 type fakeRunner struct {

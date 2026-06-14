@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/bbitton/tailscale-surfshark/internal/auth"
-	"github.com/bbitton/tailscale-surfshark/internal/eventbus"
-	"github.com/bbitton/tailscale-surfshark/internal/state"
+	"github.com/ben4523/tailscale-surfshark/internal/auth"
+	"github.com/ben4523/tailscale-surfshark/internal/eventbus"
+	"github.com/ben4523/tailscale-surfshark/internal/state"
 )
 
 type Ops interface {

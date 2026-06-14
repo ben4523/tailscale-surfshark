@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bbitton/tailscale-surfshark/internal/auth"
+	"github.com/ben4523/tailscale-surfshark/internal/auth"
 )
 
 type fakeWhois func(ctx context.Context, ip string) (string, error)

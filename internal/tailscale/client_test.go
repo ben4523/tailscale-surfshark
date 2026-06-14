@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/bbitton/tailscale-surfshark/internal/tailscale"
+	"github.com/ben4523/tailscale-surfshark/internal/tailscale"
 )
 
 type fakeRunner struct {

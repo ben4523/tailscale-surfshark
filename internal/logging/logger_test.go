@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bbitton/tailscale-surfshark/internal/logging"
+	"github.com/ben4523/tailscale-surfshark/internal/logging"
 )
 
 func TestLogger_StructuredJSON(t *testing.T) {

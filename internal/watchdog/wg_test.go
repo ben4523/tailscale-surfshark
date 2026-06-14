@@ -3,7 +3,7 @@ package watchdog_test
 import (
 	"testing"
 
-	"github.com/bbitton/tailscale-surfshark/internal/watchdog"
+	"github.com/ben4523/tailscale-surfshark/internal/watchdog"
 )
 
 func TestPickNextCandidate_UsesPreferredFirst(t *testing.T) {

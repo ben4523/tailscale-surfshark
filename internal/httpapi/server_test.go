@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bbitton/tailscale-surfshark/internal/eventbus"
-	"github.com/bbitton/tailscale-surfshark/internal/httpapi"
-	"github.com/bbitton/tailscale-surfshark/internal/state"
+	"github.com/ben4523/tailscale-surfshark/internal/eventbus"
+	"github.com/ben4523/tailscale-surfshark/internal/httpapi"
+	"github.com/ben4523/tailscale-surfshark/internal/state"
 )
 
 type allowAllWhois struct{}

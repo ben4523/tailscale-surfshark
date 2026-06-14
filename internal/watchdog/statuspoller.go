@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bbitton/tailscale-surfshark/internal/eventbus"
-	"github.com/bbitton/tailscale-surfshark/internal/state"
+	"github.com/ben4523/tailscale-surfshark/internal/eventbus"
+	"github.com/ben4523/tailscale-surfshark/internal/state"
 )
 
 // StatusPoller refreshes public-facing stats periodically.

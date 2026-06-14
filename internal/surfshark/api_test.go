@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bbitton/tailscale-surfshark/internal/surfshark"
+	"github.com/ben4523/tailscale-surfshark/internal/surfshark"
 )
 
 func TestListServers_NoAuth(t *testing.T) {

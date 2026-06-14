@@ -1,4 +1,4 @@
-module github.com/bbitton/tailscale-surfshark
+module github.com/ben4523/tailscale-surfshark
 
 go 1.25.0
 

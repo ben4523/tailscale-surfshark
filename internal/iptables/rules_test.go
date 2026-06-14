@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bbitton/tailscale-surfshark/internal/iptables"
+	"github.com/ben4523/tailscale-surfshark/internal/iptables"
 )
 
 type recRunner struct {

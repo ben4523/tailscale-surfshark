@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bbitton/tailscale-surfshark/internal/watchdog"
+	"github.com/ben4523/tailscale-surfshark/internal/watchdog"
 )
 
 func TestTailscaledWatchdog_RestartsOnFailure(t *testing.T) {

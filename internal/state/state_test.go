@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bbitton/tailscale-surfshark/internal/state"
+	"github.com/ben4523/tailscale-surfshark/internal/state"
 )
 
 func TestDefault(t *testing.T) {

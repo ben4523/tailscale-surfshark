@@ -10,17 +10,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bbitton/tailscale-surfshark/internal/config"
-	"github.com/bbitton/tailscale-surfshark/internal/eventbus"
-	"github.com/bbitton/tailscale-surfshark/internal/httpapi"
-	"github.com/bbitton/tailscale-surfshark/internal/iptables"
-	"github.com/bbitton/tailscale-surfshark/internal/logging"
-	"github.com/bbitton/tailscale-surfshark/internal/state"
-	"github.com/bbitton/tailscale-surfshark/internal/surfshark"
-	tsc "github.com/bbitton/tailscale-surfshark/internal/tailscale"
-	"github.com/bbitton/tailscale-surfshark/internal/watchdog"
-	"github.com/bbitton/tailscale-surfshark/internal/wireguard"
-	"github.com/bbitton/tailscale-surfshark/web"
+	"github.com/ben4523/tailscale-surfshark/internal/config"
+	"github.com/ben4523/tailscale-surfshark/internal/eventbus"
+	"github.com/ben4523/tailscale-surfshark/internal/httpapi"
+	"github.com/ben4523/tailscale-surfshark/internal/iptables"
+	"github.com/ben4523/tailscale-surfshark/internal/logging"
+	"github.com/ben4523/tailscale-surfshark/internal/state"
+	"github.com/ben4523/tailscale-surfshark/internal/surfshark"
+	tsc "github.com/ben4523/tailscale-surfshark/internal/tailscale"
+	"github.com/ben4523/tailscale-surfshark/internal/watchdog"
+	"github.com/ben4523/tailscale-surfshark/internal/wireguard"
+	"github.com/ben4523/tailscale-surfshark/web"
 )
 
 const (
