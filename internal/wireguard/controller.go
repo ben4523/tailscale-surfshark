@@ -57,8 +57,8 @@ func (c *Controller) Up(ctx context.Context, confPath string) error {
 	// wireguard-go (userspace) is observed to sometimes block its parent
 	// after the TUN is created, so wg-quick can hang waiting for it. Decouple:
 	// run wg-quick in a goroutine; in parallel, poll `ip link show wg0`. As
-	// soon as wg0 is visible, return success regardless of whether wg-quick
-	// has finished yet.
+	// soon as wg0 is visible we proceed, regardless of whether wg-quick
+	// has finished yet. Errors from wg-quick are still propagated.
 	upCtx, upCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer upCancel()
 
@@ -70,21 +70,31 @@ func (c *Controller) Up(ctx context.Context, confPath string) error {
 
 	deadline := time.After(10 * time.Second)
 	for {
-		if _, err := c.r.Run(ctx, "ip", "link", "show", "wg0"); err == nil {
-			c.logInfo("wg-quick: wg0 visible, proceeding (background wg-quick may still be running)")
-			return nil
-		}
+		// Authoritative: if wg-quick reported back, honor the result first.
 		select {
 		case err := <-done:
 			if err != nil {
 				return fmt.Errorf("wg-quick up: %w", err)
 			}
-			// wg-quick exited; give wg0 one more 200ms chance.
+			// wg-quick succeeded — wg0 should be present (allow a tiny grace).
+			if _, qerr := c.r.Run(ctx, "ip", "link", "show", "wg0"); qerr == nil {
+				return nil
+			}
 			time.Sleep(200 * time.Millisecond)
-			if _, err := c.r.Run(ctx, "ip", "link", "show", "wg0"); err == nil {
+			if _, qerr := c.r.Run(ctx, "ip", "link", "show", "wg0"); qerr == nil {
 				return nil
 			}
 			return fmt.Errorf("wg-quick up exited ok but wg0 never appeared")
+		default:
+		}
+
+		// wg-quick still running — bypass the wait if wg0 is already up.
+		if _, err := c.r.Run(ctx, "ip", "link", "show", "wg0"); err == nil {
+			c.logInfo("wg-quick: wg0 visible, proceeding (background wg-quick may still be running)")
+			return nil
+		}
+
+		select {
 		case <-deadline:
 			return fmt.Errorf("wg-quick up: wg0 never appeared within 10s")
 		case <-time.After(100 * time.Millisecond):

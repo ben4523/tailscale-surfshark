@@ -3,6 +3,7 @@ package wireguard_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 )
 
 type fakeRunner struct {
+	mu    sync.Mutex
 	calls []string
 	out   map[string]string
 	err   map[string]error
@@ -20,11 +22,15 @@ func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	for _, a := range args {
 		key += " " + a
 	}
+	f.mu.Lock()
 	f.calls = append(f.calls, key)
-	if e := f.err[key]; e != nil {
-		return nil, e
+	err := f.err[key]
+	out := f.out[key]
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
 	}
-	return []byte(f.out[key]), nil
+	return []byte(out), nil
 }
 
 func TestUp_CallsWGQuick(t *testing.T) {
