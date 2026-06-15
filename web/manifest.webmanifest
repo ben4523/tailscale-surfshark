@@ -1,0 +1,19 @@
+{
+  "name": "Surfshark Exit",
+  "short_name": "Surfshark",
+  "description": "Control panel for Tailscale exit-node Surfshark VPN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#050b18",
+  "background_color": "#050b18",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

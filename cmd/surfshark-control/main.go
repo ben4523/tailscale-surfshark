@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -122,32 +121,36 @@ func (o *Ops) SwitchLocation(ctx context.Context, loc string) error {
 		city = strings.TrimSpace(loc[idx+3:])
 	}
 
-	// gluetun PUT /v1/vpn/settings stores prefs but doesn't reconnect on its
-	// own (we observed this). The reliable path is to rewrite .env and
-	// `docker compose up -d --force-recreate gluetun` — picks up new SERVER_*
-	// envs cleanly. Our container's netns drops briefly (~10-15s) while
-	// gluetun re-establishes, then Tailscale heals automatically.
-	if err := o.updateEnvSurfsharkLocation(country, city); err != nil {
-		return fmt.Errorf("update .env: %w", err)
+	// Write both country AND city explicitly. PUT /v1/vpn/settings merges, so
+	// sending only city leaves a stale Countries=[boot env var] in place, and
+	// gluetun's filter intersects them — usually zero matches → random server
+	// in the old country. SwitchTarget overrides both fields together.
+	// Also persist the new country to .env so a future restart picks it up.
+	if err := o.g.SwitchTarget(ctx, country, city); err != nil {
+		return err
 	}
+	_ = o.updateEnvSurfsharkLocation(country, city) // best-effort
 
 	o.st.Surfshark.CurrentLocation = loc
 	_ = o.st.Save(statePath)
 	o.bus.Publish(eventbus.Event{Type: "status_update"})
 
-	// Detached subprocess: survives our own destruction. Recreating gluetun
-	// destroys the shared netns; we must also recreate ourselves so we re-join
-	// the new gluetun's netns. The subprocess (via Setsid) keeps running after
-	// we die so it can spawn the new us.
-	cmd := exec.Command("sh", "-c",
-		"sleep 1 && docker compose up -d --force-recreate gluetun tailscale-surfshark")
-	cmd.Dir = "/workspace"
-	cmd.Env = append(os.Environ(), "COMPOSE_PROJECT_NAME=tailscale-surfshark")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
-		o.logger.Error("detach docker compose", "err", err.Error())
-	}
-	// Don't wait — we'll be killed before it completes anyway.
+	// Cycle the VPN asynchronously so the HTTP response returns immediately.
+	// The brief tunnel-down window (~5–10s) does temporarily cut egress from
+	// gluetun's netns — tailscaled's DERP connection may pause but the netns
+	// itself persists, so as soon as the new tunnel is up the UI recovers.
+	go func() {
+		bg, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := o.g.SetRunning(bg, false); err != nil {
+			o.logger.Error("gluetun stop", "error", err.Error())
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+		if err := o.g.SetRunning(bg, true); err != nil {
+			o.logger.Error("gluetun start", "error", err.Error())
+		}
+	}()
 	return nil
 }
 
@@ -270,8 +273,12 @@ func main() {
 	)
 	go tsWatch.Run(rootCtx)
 
+	// Bind on all interfaces so the dashboard is reachable both via the
+	// loopback proxy from `tailscale serve` (when tailscaled lives in this
+	// netns) AND from the host-side tailscale-front through gluetun's bridge
+	// IP (172.30.0.2). Auth middleware gates access — no leak risk.
 	httpServer := &http.Server{
-		Addr:              "127.0.0.1:" + fmt.Sprintf("%d", httpPort),
+		Addr:              "0.0.0.0:" + fmt.Sprintf("%d", httpPort),
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

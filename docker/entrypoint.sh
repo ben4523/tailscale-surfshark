@@ -3,66 +3,67 @@ set -euo pipefail
 
 err() { echo "entrypoint: $*" >&2; }
 
-: "${TS_AUTHKEY:?TS_AUTHKEY is required (Tailscale pre-auth key)}"
-: "${TS_ALLOWED_USERS:?TS_ALLOWED_USERS is required (comma-separated tailnet emails)}"
-TS_HOSTNAME="${TS_HOSTNAME:-synology-surfshark-exit}"
+: "${TS_ALLOWED_USERS:?TS_ALLOWED_USERS is required (comma-separated tailnet emails or '*')}"
 
-mkdir -p /data/tailscale /data/surfshark /data/logs
-mkdir -p /etc/wireguard
+mkdir -p /data/surfshark /data/logs
 chmod 700 /data/surfshark
 
-# Ensure ip_forward (sysctls in compose should already set it; this is a guard).
+# Guard rail: kernel forwarding must be on for the fast exit-node's traffic
+# to traverse this netns into tun0. Compose sysctls should already do this.
 if [[ "$(cat /proc/sys/net/ipv4/ip_forward)" != "1" ]]; then
   err "net.ipv4.ip_forward is 0; attempting to set"
   sysctl -w net.ipv4.ip_forward=1 || { err "failed to enable ip_forward"; exit 3; }
 fi
 
-# Tell wg-quick to use userspace WireGuard. DSM kernels miss the wireguard.ko
-# module; wireguard-go provides a userspace TUN-based implementation that the
-# wg-quick script falls back to when the kernel can't create the interface.
-export WG_QUICK_USERSPACE_IMPLEMENTATION=wireguard-go
+# tailscaled USED to run here as the "slow" exit-node (userspace-networking,
+# DERP-relayed). It has been retired in favor of tss-tailscale-front which
+# runs on the host netns with kernel TUN and direct UDP — same Surfshark
+# egress path, just faster. This container is now only:
+#   1) the Go HTTP daemon (dashboard + gluetun control)
+#   2) the iptables forwarding glue that lets the fast node's exit-node
+#      traffic actually leave through gluetun's tun0
+setup_egress_forwarding() {
+  local bridge_iface tun_iface
+  # Wait up to 60s for tun0. If gluetun hasn't established the tunnel yet,
+  # there's nothing to MASQUERADE to. The daemon launches regardless; rules
+  # can be re-applied on the next tunnel up.
+  for i in $(seq 1 60); do
+    if ip link show tun0 &>/dev/null; then
+      tun_iface=tun0
+      break
+    fi
+    sleep 1
+  done
+  if [[ -z "${tun_iface:-}" ]]; then
+    err "egress-forwarding: tun0 never appeared, skipping (fast exit-node will fail to egress until next reconnect)"
+    return 0
+  fi
 
-# Start tailscaled in background, state in /data/tailscale.
-# --tun=userspace-networking runs Tailscale entirely in user-space netstack,
-# bypassing the DSM kernel's missing netfilter modules. Exit-node routing
-# still works: outbound connections from netstack use the container's normal
-# routing table (which wg-quick will point at wg0).
-TS_DEBUG_FIREWALL_MODE=nftables \
-tailscaled \
-  --state=/data/tailscale/tailscaled.state \
-  --socket=/var/run/tailscale/tailscaled.sock \
-  --tun=userspace-networking \
-  &
-TSD_PID=$!
+  # Identify the interface bound to the tss-egress bridge by its known IP
+  # space (172.30.0.0/24, hard-coded in docker-compose.yml).
+  bridge_iface=$(ip -o -4 addr show | awk '$4 ~ /^172\.30\.0\./ {print $2; exit}')
+  if [[ -z "$bridge_iface" ]]; then
+    err "egress-forwarding: no interface in 172.30.0.0/24 — tss-egress bridge not attached, skipping"
+    return 0
+  fi
 
-# Wait for socket.
-for i in $(seq 1 30); do
-  if [[ -S /var/run/tailscale/tailscaled.sock ]]; then break; fi
-  sleep 1
-done
-if [[ ! -S /var/run/tailscale/tailscaled.sock ]]; then
-  err "tailscaled socket never appeared"
-  kill "$TSD_PID" 2>/dev/null || true
-  exit 2
-fi
+  err "egress-forwarding: bridge=$bridge_iface tun=$tun_iface"
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null || true
 
-# Bring tailscale up (idempotent).
-tailscale up \
-  --authkey="${TS_AUTHKEY}" \
-  --advertise-exit-node \
-  --accept-routes \
-  --accept-dns=false \
-  --hostname="${TS_HOSTNAME}"
+  # -C tests existence; -I inserts at the top of the chain. We insert at top
+  # so we win against any DROP gluetun may have appended for the FORWARD
+  # chain (which it does by default with FIREWALL=on). iptables-legacy is
+  # required: DSM kernels don't support nf_tables.
+  iptables-legacy -C FORWARD -i "$bridge_iface" -o "$tun_iface" -j ACCEPT 2>/dev/null \
+    || iptables-legacy -I FORWARD 1 -i "$bridge_iface" -o "$tun_iface" -j ACCEPT
+  iptables-legacy -C FORWARD -i "$tun_iface" -o "$bridge_iface" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
+    || iptables-legacy -I FORWARD 1 -i "$tun_iface" -o "$bridge_iface" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+  iptables-legacy -t nat -C POSTROUTING -o "$tun_iface" -s 172.30.0.0/24 -j MASQUERADE 2>/dev/null \
+    || iptables-legacy -t nat -A POSTROUTING -o "$tun_iface" -s 172.30.0.0/24 -j MASQUERADE
+}
 
-# Expose the local HTTP UI to the tailnet. In userspace-networking mode the
-# Tailscale IP is not on a kernel interface, so the Go server binds 127.0.0.1
-# and Tailscale serve forwards incoming tailnet traffic to it. Headers
-# (Tailscale-User-Login etc.) are injected so the auth middleware can
-# identify the caller without calling whois.
-# Idempotent reset; we don't care if reset fails on first boot.
-tailscale serve reset 2>/dev/null || true
-tailscale serve --bg --http=8080 http://127.0.0.1:8080 || \
-  err "tailscale serve failed (UI may be unreachable from tailnet — check tailnet HTTPS prefs)"
+# Run in background so a stuck wait doesn't block daemon startup.
+setup_egress_forwarding &
 
 # Hand off to the Go daemon as PID 1.
 exec /app/surfshark-control

@@ -64,7 +64,7 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 		user := strings.TrimSpace(r.Header.Get("Tailscale-User-Login"))
 
 		if user == "" {
-			// No header. Two possible paths:
+			// No header. Three possible paths:
 			//
 			//   a) `tailscale serve --http=...` over plain HTTP. The serve proxy
 			//      strips the original client and presents the request from
@@ -73,9 +73,16 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 			//      `tailscale serve` only accepts authenticated tailnet members,
 			//      so loopback is a proxy-vouched tailnet caller.
 			//
-			//   b) Direct connection from a Tailscale-routed IP (kernel mode).
+			//   b) socat (or other L4) reverse-proxy running in the host netns
+			//      of tss-tailscale-front, which only binds on the tailnet IP
+			//      and forwards into our bridge (172.30.0.0/24). The daemon
+			//      sees the source as the bridge gateway 172.30.0.1 — the
+			//      only path to reach this IP is via tailscaled, so trust it
+			//      the same way we trust loopback.
+			//
+			//   c) Direct connection from a Tailscale-routed IP (kernel mode).
 			//      Resolve identity via whois.
-			if isLoopback(ip) {
+			if isLoopback(ip) || isTrustedBridge(ip) {
 				// Treat as a generic tailnet member. Real identity unknown.
 				// Allowed only when the operator opted into the wildcard (*).
 				user = "tailnet-member-via-serve"
@@ -136,4 +143,23 @@ func isLoopback(s string) bool {
 		return false
 	}
 	return ip.IsLoopback()
+}
+
+// trustedBridgeNet is the docker bridge subnet shared between gluetun's netns
+// and the host-side tss-tailscale-front. Any reverse proxy running in front
+// can only forward packets to this daemon through that bridge, and the only
+// way to reach the bridge is via tailscaled — so a request whose source IP
+// lives here is implicitly a tailnet-vouched call.
+var trustedBridgeNet = &net.IPNet{
+	IP:   net.IPv4(172, 30, 0, 0),
+	Mask: net.CIDRMask(24, 32),
+}
+
+// isTrustedBridge reports whether s is an address on the tss-egress bridge.
+func isTrustedBridge(s string) bool {
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return false
+	}
+	return trustedBridgeNet.Contains(ip)
 }

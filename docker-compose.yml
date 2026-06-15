@@ -27,6 +27,14 @@ services:
       - ./gluetun-auth:/gluetun/auth:ro
     # gluetun manages routes/iptables inside its own netns. We rely on its
     # health check (the VPN is up when /v1/openvpn/status reports running).
+    networks:
+      default: {}
+      # Static IP on the egress bridge so tss-tailscale-front (on the host
+      # netns) can policy-route exit-node traffic into gluetun's tun0 via a
+      # fixed next-hop. Without a fixed IP the policy route would break every
+      # time gluetun is recreated.
+      tss-egress:
+        ipv4_address: 172.30.0.2
 
   tailscale-surfshark:
     image: tailscale-surfshark:dev
@@ -56,3 +64,38 @@ services:
       COMPOSE_PROJECT_NAME: tailscale-surfshark
     env_file:
       - .env
+
+  # Fast Tailscale exit-node: lives in the HOST netns (own UDP port 41642,
+  # direct P2P possible if port is forwarded on the Free box). Its outbound
+  # exit-node traffic is policy-routed via the tss-egress bridge into
+  # gluetun's tun0 → Surfshark. Adds a SECOND tailnet device alongside the
+  # slow one in gluetun netns; the slow one is left untouched so the
+  # dashboard keeps working even if this fast path breaks.
+  tss-tailscale-front:
+    image: tailscale-surfshark:dev
+    container_name: tss-tailscale-front
+    build: .
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    depends_on:
+      - gluetun
+    volumes:
+      - ./data/tailscale-front:/var/lib/tailscale
+    environment:
+      TS_AUTHKEY_FRONT: ${TS_AUTHKEY_FRONT}
+      TS_HOSTNAME_FRONT: ${TS_HOSTNAME_FRONT:-synology-surfshark-exit}
+      TS_PORT_FRONT: ${TS_PORT_FRONT:-41642}
+      TS_TUN_NAME: ${TS_TUN_NAME:-tailscale1}
+      GLUETUN_BRIDGE_IP: 172.30.0.2
+    entrypoint: ["/entrypoint-front.sh"]
+
+networks:
+  tss-egress:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

@@ -46,37 +46,42 @@ func (c *Client) SetRunning(ctx context.Context, running bool) error {
 	return c.do(ctx, "PUT", "/v1/openvpn/status", Status{Status: want}, nil)
 }
 
-// PatchSettings is the partial settings body gluetun's PUT /v1/vpn/settings
-// expects (settings.VPN with OpenVPN.Provider.ServerSelection).
+// PatchSettings is the partial settings body PUT /v1/vpn/settings expects.
+// Provider lives at the root of settings.VPN — NOT nested under openvpn.
+// Nesting it under openvpn makes gluetun parse the openvpn section, ignore
+// the unknown nested provider field, and return "settings left unchanged"
+// silently. This cost us several hours of "why is it still Marseille".
 type PatchSettings struct {
-	OpenVPN OpenVPNSection `json:"openvpn"`
-}
-type OpenVPNSection struct {
 	Provider ProviderSection `json:"provider"`
 }
 type ProviderSection struct {
 	ServerSelection ServerSelection `json:"server_selection"`
 }
+// No omitempty: PUT /v1/vpn/settings merges into existing settings, so we must
+// send the fields explicitly to clear stale values. Empty slice = no constraint.
 type ServerSelection struct {
-	Countries []string `json:"countries,omitempty"`
-	Cities    []string `json:"cities,omitempty"`
+	Countries []string `json:"countries"`
+	Cities    []string `json:"cities"`
 	Regions   []string `json:"regions,omitempty"`
 }
 
-// SwitchCountry tells gluetun to reconnect to a server in the given country.
-// The container's openvpn loop validates the new settings and reconnects.
-func (c *Client) SwitchCountry(ctx context.Context, country string) error {
-	body := PatchSettings{OpenVPN: OpenVPNSection{Provider: ProviderSection{
-		ServerSelection: ServerSelection{Countries: []string{country}},
-	}}}
-	return c.do(ctx, "PUT", "/v1/vpn/settings", body, nil)
-}
-
-// SwitchCity is like SwitchCountry but selects by city (overrides countries).
-func (c *Client) SwitchCity(ctx context.Context, city string) error {
-	body := PatchSettings{OpenVPN: OpenVPNSection{Provider: ProviderSection{
-		ServerSelection: ServerSelection{Cities: []string{city}},
-	}}}
+// SwitchTarget sets countries+cities together. Both are sent explicitly to
+// avoid gluetun's PUT-merge leaving a stale country (from the boot env var)
+// constraining the new city filter — that combination intersects to zero
+// matching servers, and gluetun silently falls back to a random server in
+// the leftover country instead of the requested city.
+func (c *Client) SwitchTarget(ctx context.Context, country, city string) error {
+	countries := []string{}
+	if country != "" {
+		countries = []string{country}
+	}
+	cities := []string{}
+	if city != "" {
+		cities = []string{city}
+	}
+	body := PatchSettings{Provider: ProviderSection{
+		ServerSelection: ServerSelection{Countries: countries, Cities: cities},
+	}}
 	return c.do(ctx, "PUT", "/v1/vpn/settings", body, nil)
 }
 

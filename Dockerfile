@@ -30,18 +30,33 @@ RUN apk add --no-cache \
     wireguard-tools \
     nftables \
     iptables \
+    iptables-legacy \
     ip6tables \
     iproute2 \
     ca-certificates \
     curl \
-    bash
+    bash \
+    socat
 
 COPY --from=tailscale-stage /tailscale /usr/bin/tailscale
 COPY --from=tailscale-stage /tailscaled /usr/sbin/tailscaled
 COPY --from=wg-build /go/bin/wireguard /usr/bin/wireguard-go
 COPY --from=build /out/surfshark-control /app/surfshark-control
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY docker/entrypoint-front.sh /entrypoint-front.sh
+RUN chmod +x /entrypoint.sh /entrypoint-front.sh
+
+# Force iptables/ip6tables to point at the legacy backend. DSM kernels lack
+# the nf_tables module, so iptables-nft fails with "Could not fetch rule set
+# generation id". Tailscale in kernel-TUN mode calls /sbin/iptables directly
+# to set up its ts-input / ts-forward chains; without this symlink, tailscaled
+# can't bring up its router and the kernel TUN device never appears.
+RUN ln -sf /sbin/iptables-legacy /sbin/iptables \
+ && ln -sf /sbin/ip6tables-legacy /sbin/ip6tables \
+ && ln -sf /sbin/iptables-legacy-save /sbin/iptables-save \
+ && ln -sf /sbin/iptables-legacy-restore /sbin/iptables-restore \
+ && mkdir -p /etc/iproute2 \
+ && echo "200 tss-egress" > /etc/iproute2/rt_tables
 
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]
