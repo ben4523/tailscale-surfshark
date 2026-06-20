@@ -80,9 +80,9 @@ function render() {
     heroLoc.textContent = city ? `${country} · ${city}` : (country || "—");
     heroIp.textContent = stats.public_ip || "Measuring…";
   } else {
-    heroFlag.textContent = "🚫";
-    heroLoc.textContent = "Tunnel down";
-    heroIp.textContent = "No egress — last: " + (stats.public_ip || "?");
+    heroFlag.textContent = "🏠";
+    heroLoc.textContent = "Direct (no VPN)";
+    heroIp.textContent = "Exit-node falls back to host network";
   }
 
   // power card
@@ -92,22 +92,19 @@ function render() {
 
   // details
   const details = $("#details");
-  const armed = ks.currently_armed;
-  // Three states. "Armed" only makes sense when the VPN is up — if VPN is
-  // off but kill switch is enabled, traffic IS blocked too (gluetun firewall),
-  // we surface that explicitly so the user can verify peers lose internet.
-  let ksLabel, ksClass;
-  if (armed && vpnOn)         { ksLabel = "Armed (blocking leaks)";   ksClass = "armed"; }
-  else if (ks.enabled_by_env) { ksLabel = "Blocking (VPN down)";       ksClass = "alert"; }
-  else                        { ksLabel = "Off — leaks possible";      ksClass = "alert"; }
+  // Routing is dynamic: the front's egress watcher swaps the policy rule
+  // for exit-node traffic based on VPN state, so the description has to
+  // match the actual behaviour the user observes.
+  const egressLabel = vpnOn ? "Via Surfshark VPN"           : "Direct — host network";
+  const egressClass = vpnOn ? "armed"                        : "alert";
 
   const measured = stats.last_measured
     ? new Date(stats.last_measured).toLocaleTimeString()
     : "—";
   details.innerHTML = "";
   for (const [k, v, klass] of [
-    ["Public IP", vpnOn ? (stats.public_ip || "—") : "— (VPN off)", vpnOn ? "" : "alert"],
-    ["Kill switch", ksLabel, ksClass],
+    ["Public IP", vpnOn ? (stats.public_ip || "—") : "— (uses host IP)", vpnOn ? "" : ""],
+    ["Egress", egressLabel, egressClass],
     ["Last update", measured, ""],
     ["Version", state.version || "—", ""],
   ]) {
@@ -123,13 +120,12 @@ function render() {
 function renderBanners() {
   if (!state) return;
   const s = state.surfshark || {};
-  const ks = state.kill_switch || {};
   const banners = $("#banners");
   banners.innerHTML = "";
-  if (!s.toggle && !ks.enabled_by_env) {
+  if (!s.toggle) {
     const b = document.createElement("div");
-    b.className = "banner red";
-    b.textContent = "VPN off and kill-switch not enforced — clients exit with real IP.";
+    b.className = "banner amber";
+    b.textContent = "Surfshark off — exit-node clients see the host's real IP.";
     banners.appendChild(b);
   }
 }

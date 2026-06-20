@@ -111,5 +111,37 @@ else
   socat TCP-LISTEN:8080,bind="$TS_IP",reuseaddr,fork TCP:"$GLUETUN_BRIDGE_IP":8080 &
 fi
 
+# Egress watcher — toggles the policy routing rule based on the user's VPN
+# state in the daemon. When the dashboard says VPN ON, exit-node traffic
+# follows table $TABLE_NAME (→ gluetun → Surfshark). When the dashboard says
+# VPN OFF, the rule is removed and tailscaled's standard exit-node iptables
+# (auto-MASQUERADE on ovs_eth0) carries the traffic straight out via Free.
+# Lets the user toggle Surfshark on/off from the dashboard without losing
+# internet on the peer — instead of dropping to a dead tun0, traffic falls
+# back to the host default route.
+egress_watcher() {
+  local last_state="init" body state
+  while true; do
+    body=$(curl -s -m 3 "http://${GLUETUN_BRIDGE_IP}:8080/api/status" 2>/dev/null) || { sleep 5; continue; }
+    # Crude but deterministic — the daemon's JSON always has the surfshark
+    # block first and its `toggle` field is a plain bool literal.
+    state=$(printf '%s' "$body" | grep -o '"toggle":[a-z]*' | head -1 | cut -d: -f2)
+    if [[ "$state" != "true" && "$state" != "false" ]]; then sleep 5; continue; fi
+    if [[ "$state" != "$last_state" ]]; then
+      if [[ "$state" == "true" ]]; then
+        ip rule add iif "$TS_TUN_NAME" table "$TABLE_NAME" priority 100 2>/dev/null || true
+        log "VPN on -> exit-node traffic via gluetun (Surfshark)"
+      else
+        # Drop ALL matching rules in case duplicates were ever inserted.
+        while ip rule del iif "$TS_TUN_NAME" table "$TABLE_NAME" 2>/dev/null; do :; done
+        log "VPN off -> exit-node traffic via host default (Free direct)"
+      fi
+      last_state="$state"
+    fi
+    sleep 5
+  done
+}
+egress_watcher &
+
 # Block on tailscaled so the container stays alive and we get its logs.
 wait "$TSD_PID"
