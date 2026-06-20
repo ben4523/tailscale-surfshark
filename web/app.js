@@ -90,20 +90,29 @@ function render() {
   power.classList.toggle("on", vpnOn);
   $("#powerLabel").textContent = vpnOn ? "On" : "Off";
 
+  // Kill switch toggle reflects state.kill_switch.user_on; the front's
+  // egress watcher polls the same field on its own loop.
+  const ksOn = !!ks.user_on;
+  const sw = $("#ksSwitch");
+  sw.setAttribute("aria-checked", ksOn ? "true" : "false");
+  $("#ksSub").textContent = vpnOn
+    ? (ksOn ? "Armed — would block if VPN drops" : "Off — would fall back to host network")
+    : (ksOn ? "Blocking — no internet on exit-node" : "Off — exit-node uses host network");
+
   // details
   const details = $("#details");
-  // Routing is dynamic: the front's egress watcher swaps the policy rule
-  // for exit-node traffic based on VPN state, so the description has to
-  // match the actual behaviour the user observes.
-  const egressLabel = vpnOn ? "Via Surfshark VPN"           : "Direct — host network";
-  const egressClass = vpnOn ? "armed"                        : "alert";
+  // Routing label = the actual mode the watcher will have selected.
+  let egressLabel, egressClass;
+  if (vpnOn)       { egressLabel = "Via Surfshark VPN";        egressClass = "armed"; }
+  else if (ksOn)   { egressLabel = "Blocked (kill switch on)"; egressClass = "alert"; }
+  else             { egressLabel = "Direct — host network";    egressClass = "alert"; }
 
   const measured = stats.last_measured
     ? new Date(stats.last_measured).toLocaleTimeString()
     : "—";
   details.innerHTML = "";
   for (const [k, v, klass] of [
-    ["Public IP", vpnOn ? (stats.public_ip || "—") : "— (uses host IP)", vpnOn ? "" : ""],
+    ["Public IP", vpnOn ? (stats.public_ip || "—") : (ksOn ? "— (blocked)" : "— (uses host IP)"), ""],
     ["Egress", egressLabel, egressClass],
     ["Last update", measured, ""],
     ["Version", state.version || "—", ""],
@@ -198,6 +207,21 @@ async function postJSON(path, body) {
   return r;
 }
 
+async function toggleKillSwitch() {
+  if (!state) return;
+  const ks = state.kill_switch || {};
+  const next = !ks.user_on;
+  // Optimistic UI: flip immediately, then let the API confirm via SSE.
+  if (!state.kill_switch) state.kill_switch = {};
+  state.kill_switch.user_on = next;
+  render();
+  try {
+    await postJSON("/api/surfshark/killswitch", { enabled: next });
+  } finally {
+    fetchStatus();
+  }
+}
+
 async function togglePower() {
   if (!state || switching) return;
   const next = !(state.surfshark && state.surfshark.toggle);
@@ -277,6 +301,7 @@ function startSSE() {
 
 // ---------- wire UI ----------
 $("#powerCard").addEventListener("click", togglePower);
+$("#ksSwitch").addEventListener("click", toggleKillSwitch);
 $("#locationCard").addEventListener("click", () => {
   buildLocList();
   $("#locSearch").value = "";

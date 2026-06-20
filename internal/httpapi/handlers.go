@@ -59,6 +59,21 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, map[string]string{"status": "started"})
 }
 
+func (s *Server) handleKillSwitch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", 400)
+		return
+	}
+	if err := s.d.Ops.SetKillSwitch(r.Context(), body.Enabled); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"user_on": body.Enabled})
+}
+
 func (s *Server) handlePreferred(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Locations []string `json:"locations"`

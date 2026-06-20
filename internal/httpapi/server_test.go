@@ -44,6 +44,9 @@ func (f *fakeOps) AvailableLocations() []string { return f.available }
 func (f *fakeOps) SetPreferred(ctx context.Context, locs []string) error {
 	return nil
 }
+func (f *fakeOps) SetKillSwitch(ctx context.Context, on bool) error {
+	return nil
+}
 
 func newTestServer(t *testing.T) (*httptest.Server, *fakeOps, *state.State) {
 	st := state.Default()

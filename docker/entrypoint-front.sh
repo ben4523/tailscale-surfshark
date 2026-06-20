@@ -111,32 +111,56 @@ else
   socat TCP-LISTEN:8080,bind="$TS_IP",reuseaddr,fork TCP:"$GLUETUN_BRIDGE_IP":8080 &
 fi
 
-# Egress watcher — toggles the policy routing rule based on the user's VPN
-# state in the daemon. When the dashboard says VPN ON, exit-node traffic
-# follows table $TABLE_NAME (→ gluetun → Surfshark). When the dashboard says
-# VPN OFF, the rule is removed and tailscaled's standard exit-node iptables
-# (auto-MASQUERADE on ovs_eth0) carries the traffic straight out via Free.
-# Lets the user toggle Surfshark on/off from the dashboard without losing
-# internet on the peer — instead of dropping to a dead tun0, traffic falls
-# back to the host default route.
+# Egress watcher — picks one of three egress modes based on dashboard state:
+#
+#   VPN on,  KS any   → "gluetun"  — exit-node traffic via tun0 (Surfshark)
+#   VPN off, KS off   → "direct"   — fall back to host default route (Free)
+#   VPN off, KS on    → "block"    — drop with ICMP unreachable, no leaks
+#
+# Two ip rules to manage (cleared on every transition for idempotency):
+#   priority  50 (unreachable) → blocks traffic (wins over 100 if both exist)
+#   priority 100 lookup $TABLE → routes via gluetun bridge
+egress_apply() {
+  local target=$1
+  while ip rule del iif "$TS_TUN_NAME" priority 50 2>/dev/null; do :; done
+  while ip rule del iif "$TS_TUN_NAME" table "$TABLE_NAME" 2>/dev/null; do :; done
+  case "$target" in
+    gluetun)
+      ip rule add iif "$TS_TUN_NAME" table "$TABLE_NAME" priority 100
+      ;;
+    block)
+      ip rule add iif "$TS_TUN_NAME" priority 50 unreachable
+      ;;
+    direct)
+      : # no rule — packets follow the host's normal default route
+      ;;
+  esac
+}
+
 egress_watcher() {
-  local last_state="init" body state
+  local last_mode="init" body vpn ks mode
   while true; do
     body=$(curl -s -m 3 "http://${GLUETUN_BRIDGE_IP}:8080/api/status" 2>/dev/null) || { sleep 5; continue; }
-    # Crude but deterministic — the daemon's JSON always has the surfshark
-    # block first and its `toggle` field is a plain bool literal.
-    state=$(printf '%s' "$body" | grep -o '"toggle":[a-z]*' | head -1 | cut -d: -f2)
-    if [[ "$state" != "true" && "$state" != "false" ]]; then sleep 5; continue; fi
-    if [[ "$state" != "$last_state" ]]; then
-      if [[ "$state" == "true" ]]; then
-        ip rule add iif "$TS_TUN_NAME" table "$TABLE_NAME" priority 100 2>/dev/null || true
-        log "VPN on -> exit-node traffic via gluetun (Surfshark)"
-      else
-        # Drop ALL matching rules in case duplicates were ever inserted.
-        while ip rule del iif "$TS_TUN_NAME" table "$TABLE_NAME" 2>/dev/null; do :; done
-        log "VPN off -> exit-node traffic via host default (Free direct)"
-      fi
-      last_state="$state"
+    # The daemon's JSON has surfshark.toggle and kill_switch.user_on as
+    # plain bool literals. grep extracts each independently.
+    vpn=$(printf '%s' "$body" | grep -o '"toggle":[a-z]*' | head -1 | cut -d: -f2)
+    ks=$(printf '%s'  "$body" | grep -o '"user_on":[a-z]*' | head -1 | cut -d: -f2)
+    if [[ "$vpn" != "true" && "$vpn" != "false" ]]; then sleep 5; continue; fi
+    if [[ "$ks"  != "true" && "$ks"  != "false" ]]; then ks="false"; fi
+
+    if   [[ "$vpn" == "true"  ]]; then mode="gluetun"
+    elif [[ "$ks"  == "true"  ]]; then mode="block"
+    else                                mode="direct"
+    fi
+
+    if [[ "$mode" != "$last_mode" ]]; then
+      egress_apply "$mode"
+      case "$mode" in
+        gluetun) log "egress: via gluetun (Surfshark)";;
+        direct)  log "egress: host default (Free direct, no protection)";;
+        block)   log "egress: BLOCKED (kill switch armed, VPN down)";;
+      esac
+      last_mode="$mode"
     fi
     sleep 5
   done

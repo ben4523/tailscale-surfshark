@@ -31,6 +31,12 @@ type SurfsharkState struct {
 type KillSwitchState struct {
 	EnabledByEnv   bool `json:"enabled_by_env"`
 	CurrentlyArmed bool `json:"currently_armed"`
+	// UserOn is the runtime kill-switch toggle exposed by the dashboard.
+	// When true AND the Surfshark VPN is off, the front-side egress watcher
+	// installs an `unreachable` ip rule so exit-node traffic is dropped (no
+	// fallback to Free). When false, VPN-off falls back to host network.
+	// Initialised from KILL_SWITCH env at boot; toggled at runtime via API.
+	UserOn bool `json:"user_on"`
 }
 
 type StatsCache struct {

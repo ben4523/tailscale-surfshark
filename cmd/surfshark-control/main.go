@@ -194,6 +194,12 @@ func (o *Ops) Refresh(ctx context.Context) error {
 	return nil
 }
 
+func (o *Ops) SetKillSwitch(ctx context.Context, on bool) error {
+	o.st.KillSwitch.UserOn = on
+	o.bus.Publish(eventbus.Event{Type: "status_update"})
+	return o.st.Save(statePath)
+}
+
 func (o *Ops) SetPreferred(ctx context.Context, locs []string) error {
 	o.st.Surfshark.PreferredLocations = locs
 	o.bus.Publish(eventbus.Event{Type: "status_update"})
@@ -218,6 +224,11 @@ func main() {
 		os.Exit(1)
 	}
 	st.KillSwitch.EnabledByEnv = cfg.KillSwitch
+	// Persist a sane default for first-boot. If state.json already had a
+	// value (loaded from disk above), keep it — user toggles via UI win.
+	if !st.KillSwitch.UserOn && cfg.KillSwitch {
+		st.KillSwitch.UserOn = true
+	}
 
 	bus := eventbus.New(64)
 	tsCli := tsc.New()

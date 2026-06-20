@@ -15,6 +15,7 @@ type Ops interface {
 	SwitchLocation(ctx context.Context, loc string) error
 	Refresh(ctx context.Context) error
 	SetPreferred(ctx context.Context, locs []string) error
+	SetKillSwitch(ctx context.Context, on bool) error
 	AvailableLocations() []string
 }
 
@@ -61,6 +62,7 @@ func (s *Server) routes() {
 	s.mux.Handle("/api/surfshark/location", s.mw.Wrap(http.HandlerFunc(s.handleSwitch)))
 	s.mux.Handle("/api/surfshark/refresh", s.mw.Wrap(http.HandlerFunc(s.handleRefresh)))
 	s.mux.Handle("/api/surfshark/preferred", s.mw.Wrap(http.HandlerFunc(s.handlePreferred)))
+	s.mux.Handle("/api/surfshark/killswitch", s.mw.Wrap(http.HandlerFunc(s.handleKillSwitch)))
 	s.mux.Handle("/api/events", s.mw.Wrap(http.HandlerFunc(s.handleEvents)))
 }
 
